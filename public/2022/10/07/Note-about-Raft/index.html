@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  
+
+  
+  <title>Note about Raft | Welcome to OceanCT&#39;s world</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <meta name="description" content="Note for RaftWhy not Paxos Paxos is hard to learn and understand.  It’s hard to make a real system based on Paxos, that is, almost all real-world systems made based on Paxos turned out to have impleme">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Note about Raft">
+<meta property="og:url" content="https://oceanct.github.io/blog/2022/10/07/Note-about-Raft/index.html">
+<meta property="og:site_name" content="Welcome to OceanCT&#39;s world">
+<meta property="og:description" content="Note for RaftWhy not Paxos Paxos is hard to learn and understand.  It’s hard to make a real system based on Paxos, that is, almost all real-world systems made based on Paxos turned out to have impleme">
+<meta property="og:locale" content="en_US">
+<meta property="article:published_time" content="2022-10-07T06:30:40.000Z">
+<meta property="article:modified_time" content="2022-10-07T06:31:46.120Z">
+<meta property="article:author" content="OceanCT">
+<meta name="twitter:card" content="summary">
+  
+    <link rel="alternate" href="/blog/atom.xml" title="Welcome to OceanCT&#39;s world" type="application/atom+xml">
+  
+  
+    <link rel="icon" href="/favicon.png">
+  
+  
+    <link href="//fonts.googleapis.com/css?family=Source+Code+Pro" rel="stylesheet" type="text/css">
+  
+  
+<link rel="stylesheet" href="/blog/css/style.css">
+
+<meta name="generator" content="Hexo 5.4.2"></head>
+
+<body>
+  <div id="container">
+    <div id="wrap">
+      <header id="header">
+  <div id="banner"></div>
+  <div id="header-outer" class="outer">
+    <div id="header-title" class="inner">
+      <h1 id="logo-wrap">
+        <a href="/blog/" id="logo">Welcome to OceanCT&#39;s world</a>
+      </h1>
+      
+    </div>
+    <div id="header-inner" class="inner">
+      <nav id="main-nav">
+        <a id="main-nav-toggle" class="nav-icon"></a>
+        
+          <a class="main-nav-link" href="/blog/">Home</a>
+        
+          <a class="main-nav-link" href="/blog/archives">Archives</a>
+        
+      </nav>
+      <nav id="sub-nav">
+        
+          <a id="nav-rss-link" class="nav-icon" href="/blog/atom.xml" title="RSS Feed"></a>
+        
+        <a id="nav-search-btn" class="nav-icon" title="Search"></a>
+      </nav>
+      <div id="search-form-wrap">
+        <form action="//google.com/search" method="get" accept-charset="UTF-8" class="search-form"><input type="search" name="q" class="search-form-input" placeholder="Search"><button type="submit" class="search-form-submit">&#xF002;</button><input type="hidden" name="sitesearch" value="https://oceanct.github.io/blog"></form>
+      </div>
+    </div>
+  </div>
+</header>
+      <div class="outer">
+        <section id="main"><article id="post-Note-about-Raft" class="article article-type-post" itemscope itemprop="blogPost">
+  <div class="article-meta">
+    <a href="/blog/2022/10/07/Note-about-Raft/" class="article-date">
+  <time datetime="2022-10-07T06:30:40.000Z" itemprop="datePublished">2022-10-07</time>
+</a>
+    
+  </div>
+  <div class="article-inner">
+    
+    
+      <header class="article-header">
+        
+  
+    <h1 class="article-title" itemprop="name">
+      Note about Raft
+    </h1>
+  
+
+      </header>
+    
+    <div class="article-entry" itemprop="articleBody">
+      
+        <h1 id="Note-for-Raft"><a href="#Note-for-Raft" class="headerlink" title="Note for Raft"></a>Note for Raft</h1><h2 id="Why-not-Paxos"><a href="#Why-not-Paxos" class="headerlink" title="Why not Paxos"></a>Why not Paxos</h2><ol>
+<li><p>Paxos is hard to learn and understand.</p>
+</li>
+<li><p>It’s hard to make a real system based on Paxos, that is, almost all real-world systems made based on Paxos turned out to have implemented an algorithm quite different from it.</p>
+</li>
+</ol>
+<h2 id="Goals-for-designing-Raft"><a href="#Goals-for-designing-Raft" class="headerlink" title="Goals for designing Raft"></a>Goals for designing Raft</h2><ol>
+<li><p>Provide a complete and practical foundation for system building</p>
+</li>
+<li><p>Safe under all conditions and available under typical os</p>
+</li>
+<li><p>Easy to understand</p>
+</li>
+</ol>
+<h2 id="Characteristics-of-raft"><a href="#Characteristics-of-raft" class="headerlink" title="Characteristics of raft"></a>Characteristics of raft</h2><ol>
+<li><p>It’s a system with a leader, while Paxos one based on peer-to-peer approach.</p>
+</li>
+<li><p>It seperates problems into serveral small ones, including leader election, log replication, safety and membership changes.</p>
+</li>
+<li><p>It simplifies the state space by reducing the number of states to consider.</p>
+</li>
+</ol>
+
+      
+    </div>
+    <footer class="article-footer">
+      <a data-url="https://oceanct.github.io/blog/2022/10/07/Note-about-Raft/" data-id="cl8y3znqs0000cyhl4s5zf5eb" class="article-share-link">Share</a>
+      
+      
+    </footer>
+  </div>
+  
+    
+  
+</article>
+
+</section>
+        
+          <aside id="sidebar">
+  
+    
+
+  
+    
+
+  
+    
+  
+    
+  <div class="widget-wrap">
+    <h3 class="widget-title">Archives</h3>
+    <div class="widget">
+      <ul class="archive-list"><li class="archive-list-item"><a class="archive-list-link" href="/blog/archives/2022/10/">October 2022</a></li></ul>
+    </div>
+  </div>
+
+
+  
+    
+  <div class="widget-wrap">
+    <h3 class="widget-title">Recent Posts</h3>
+    <div class="widget">
+      <ul>
+        
+          <li>
+            <a href="/blog/2022/10/07/Note-about-Raft/">Note about Raft</a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+
+  
+</aside>
+        
+      </div>
+      <footer id="footer">
+  
+  <div class="outer">
+    <div id="footer-info" class="inner">
+      &copy; 2022 OceanCT<br>
+      Powered by <a href="http://hexo.io/" target="_blank">Hexo</a>
+    </div>
+  </div>
+</footer>
+    </div>
+    <nav id="mobile-nav">
+  
+    <a href="/blog/" class="mobile-nav-link">Home</a>
+  
+    <a href="/blog/archives" class="mobile-nav-link">Archives</a>
+  
+</nav>
+    
+
+<script src="//ajax.googleapis.com/ajax/libs/jquery/2.0.3/jquery.min.js"></script>
+
+
+  
+<link rel="stylesheet" href="/blog/fancybox/jquery.fancybox.css">
+
+  
+<script src="/blog/fancybox/jquery.fancybox.pack.js"></script>
+
+
+
+
+<script src="/blog/js/script.js"></script>
+
+
+
+
+  </div>
+</body>
+</html>
