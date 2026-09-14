@@ -3,13 +3,13 @@
 ## Source: https://github.com/hexojs/hexo/
 
 # Site
-title: Welcome to OceanCT's world
-subtitle: 'A new trip, a new adventure'
-description: 'I have to be here for some reason'
+title: OceanCT / Notes
+subtitle: '学一点，记下来。'
+description: 'OceanCT 的个人学习笔记，记录技术原理、动手实践与学习思考。'
 keywords: null
 author: OceanCT
-language: en
-timezone: ''
+language: zh-CN
+timezone: Asia/Shanghai
 
 # URL
 ## Set your site url here. For example, if you use GitHub Page, set url as 'https://username.github.io/project'
@@ -98,7 +98,7 @@ ignore:
 # Extensions
 ## Plugins: https://hexo.io/plugins/
 ## Themes: https://hexo.io/themes/
-theme: landscape
+theme: ocean
 
 # Deployment
 ## Docs: https://hexo.io/docs/one-command-deployment
