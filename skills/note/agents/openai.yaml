@@ -1,0 +1,4 @@
+interface:
+  display_name: "Note · 学习笔记"
+  short_description: "按讲述式语气整理学习笔记，保留技术细节，生成网页供审阅，确认后发布"
+  default_prompt: "使用 $note 把这次学习写成讲述式中文笔记，顺着问题展开解释，保留技术事实和引用，生成网页让我审阅，确认后再提交发布。"
