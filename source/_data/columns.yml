@@ -14,6 +14,6 @@
     - useful-tools-humanizer
 - id: k8s
   title: K8S
-  description: 从服务部署理解控制循环、集群架构与调度，再逐步实现一个 mini K8S。
+  description: 从服务部署理解控制循环、集群架构、调度与故障处理。
   posts:
     - k8s-control-loop-architecture
