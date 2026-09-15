@@ -1,0 +1,7 @@
+<% const column = note_columns().find(item => item.id === page.column_id); %>
+<div class="post-back"><a href="<%- url_for('/columns/') %>">← 全部专栏</a></div>
+<% if (column) { %>
+<section class="archive-head column-head"><div class="eyebrow">THE COLLECTION</div><h1><%= column.title %><span class="accent">。</span></h1><p><%= column.description %></p><p class="column-count"><%= column.posts.length %> 篇 · 按阅读顺序排列</p><a class="hero-link" href="<%- url_for(column.posts[0].path) %>">从第一篇开始 <span>→</span></a></section>
+<section class="column-reading"><div class="section-heading"><h2>阅读目录</h2><label class="search"><span aria-hidden="true">⌕</span><input id="note-search" type="search" placeholder="搜索本专栏…" aria-label="搜索本专栏文章"></label></div>
+<ol class="reading-list"><% column.posts.forEach(function(post, index) { %><li><span class="chapter-number" aria-hidden="true"><%= String(index + 1).padStart(2, '0') %></span><%- partial('_partial/card', {post: post}) %></li><% }); %></ol><p id="no-results" class="no-results" hidden role="status">没有找到相关文章，试试其他关键词。</p></section>
+<% } else { %><section class="empty"><h1>这个专栏暂时没有文章</h1><a href="<%- url_for('/columns/') %>">浏览其他专栏 →</a></section><% } %>

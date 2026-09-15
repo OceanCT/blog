@@ -1,0 +1,17 @@
+<% const groups = note_columns(); %>
+<div class="column-grid">
+<% groups.forEach(function(column) { %>
+  <article class="column-card" data-search="<%= [column.title, column.description, ...column.posts.map(post => post.title + ' ' + (post.description || ''))].join(' ').toLowerCase() %>">
+    <div class="column-meta"><span>主题专栏</span><span><%= column.posts.length %> 篇</span></div>
+    <h3><a href="<%- url_for(column.path) %>"><%= column.title %><span aria-hidden="true">↗</span></a></h3>
+    <p><%= column.description %></p>
+    <ol class="column-preview">
+    <% column.posts.slice(0, 3).forEach(function(post, index) { %>
+      <li><span class="chapter-number" aria-hidden="true"><%= String(index + 1).padStart(2, '0') %></span><a href="<%- url_for(post.path) %>"><%= post.title.replace(/^Agent学习笔记（[^）]+）\s*/, '') %></a></li>
+    <% }); %>
+    </ol>
+    <a class="read-link" href="<%- url_for(column.path) %>">查看完整目录 →</a>
+  </article>
+<% }); %>
+</div>
+<p id="no-results" class="no-results" hidden role="status">没有找到相关专栏或文章，试试其他关键词。</p>
