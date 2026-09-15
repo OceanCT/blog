@@ -1,6 +1,7 @@
 ---
 title: "K8S学习笔记（一）从三个副本理解控制循环与架构"
 date: 2026-09-15 14:02:33
+updated: 2026-09-15 14:16:02
 description: "从部署一个服务开始，理解 K8S 的期望状态、控制器、调度器、节点执行与服务入口，并规划 mini K8S 的实现路线。"
 categories: ["K8S 学习笔记"]
 tags: ["K8S", "系统设计"]
@@ -55,17 +56,48 @@ while running:
 
 **Node** 是集群中的工作节点，可以是一台物理机或虚拟机。**Pod** 是 K8S 调度和管理的基本工作负载单元，包含一个或多个紧密协作的容器。同一 Pod 的容器共享网络环境，并可以挂载共享卷；它们作为一个整体安排到同一个 Node。Pod 也经常只有一个业务容器。[Pod 定义与生命周期](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/)。
 
-对于这个无状态 HTTP 服务，可以使用 **Deployment** 描述部署目标。Deployment 管理版本变化，并通过 **ReplicaSet** 管理一组副本；ReplicaSet 根据模板和目标数量创建或删除 Pod。平时说“Deployment 启动了三个 Pod”是一种简写，中间还有这层控制关系。
+## ReplicaSet：这一组 Pod 少了，谁来补
+
+假设我们直接创建三个 Pod，分别叫 A、B、C。它们可以运行服务，但如果 B 被删除，仅靠剩下的两个 Pod，没有谁负责记住“这里原本应该有三个”。我们需要一个持续保存目标、检查数量的对象，这就是 **ReplicaSet**。
+
+ReplicaSet 中有几项关键配置：`replicas` 指定期望副本数，`template` 保存创建 Pod 所用的模板，`selector` 通过标签匹配 Pod。模板包含镜像、启动参数和资源需求等信息。系统还通过 Pod 上的 `ownerReferences` 记录它归哪个控制器管理，计数时不会把集群里所有 Pod 都算进去。
+
+严格说，ReplicaSet 是保存在 API 中的对象，真正执行检查与增删的是 **ReplicaSet 控制器**。平时说“ReplicaSet 补了一个 Pod”，指的就是控制器根据这个对象执行了操作。
 
 ```text
-Deployment：应用版本和更新策略
-  └─ ReplicaSet：某一版模板的副本数量
-       ├─ Pod A
-       ├─ Pod B
-       └─ Pod C
+ReplicaSet：期望 3 个 Pod，模板使用镜像 v1
+  ├─ Pod A
+  ├─ Pod B
+  └─ Pod C
+
+B 被删除后：A、C → 控制器发现缺 1 个 → 按模板创建 Pod D
 ```
 
-更新镜像后，Deployment 可以创建新的 ReplicaSet，逐渐扩容新版本、缩容旧版本。原来的 Pod 不会原地变成另一台机器上的同一个 Pod；替换出来的是具有新身份的 Pod。[Deployment 与 ReplicaSet 的关系](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/)。
+新建的 D 有自己的身份，不是把 B 复活。控制器先向 API Server 提交 Pod 对象；之后由 Scheduler 选择机器，再由那台机器上的 kubelet 启动容器。这也解释了为什么“已经补了一个 Pod 对象”和“服务已经恢复三个可用实例”之间还需要时间。
+
+反过来，把目标数量从 3 改为 2，控制器就会删除多余副本。ReplicaSet 负责使受管理的有效副本数量接近目标，并不会保证三个实例始终健康。假设 B 仍然存在，只是内部容器崩溃，在 Deployment 常用的重启策略下，通常由 kubelet 重启容器；单纯没有 Ready，不会让 ReplicaSet 立即再补一个 Pod。[ReplicaSet 的工作机制](https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/)。
+
+## Deployment：新旧两组副本怎样交接
+
+既然 ReplicaSet 能维持数量，为什么还需要 **Deployment**？因为发布新版本时，我们还要决定旧版本什么时候减少、新版本什么时候增加，以及新实例没有准备好时是否继续替换。
+
+比如当前三个 Pod 都使用 v1，现在希望更新为 v2。直接修改 ReplicaSet 的 Pod 模板，只会影响以后根据模板创建的 Pod，已有 Pod 不会因此自动全部替换。Deployment 在上面增加了版本更新的控制：为新模板管理新的 ReplicaSet，并协调新旧两组的目标数量。
+
+```text
+Deployment：目标版本 v2，期望副本数 3，采用滚动更新
+  │
+  ├─ 旧 ReplicaSet：模板使用 v1
+  │    目标数量逐步减少：3 → 2 → 1 → 0
+  │
+  └─ 新 ReplicaSet：模板使用 v2
+       目标数量逐步增加：0 → 1 → 2 → 3
+```
+
+图中表示两组的变化方向，箭头并不要求新旧两组同时各变一个。Deployment 根据更新策略和新 Pod 的可用状态调整数量。例如允许额外增加一个副本、要求至少保持三个可用副本时，可以先把新组扩到 1；等新 Pod 可用，再把旧组从 3 缩到 2，然后继续替换。更新期间，新旧 Pod 可以同时存在。
+
+在这个过程中，Deployment 控制器决定“旧组现在要几个、新组现在要几个”，每个 ReplicaSet 控制器负责落实自己那一组的数量。如果旧组此时仍要求两个副本，却有一个 Pod 被删除，旧 ReplicaSet 仍会补齐它，直到 Deployment 调低该组的目标。
+
+这两层分别处理了版本过渡和组内副本维护。平时我们通常只创建、修改 Deployment，让它管理下面的 ReplicaSet；手动修改它所管理的 ReplicaSet，可能又被 Deployment 的下一轮调谐改回去。[Deployment 与滚动更新](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/)。
 
 对象中经常出现两个字段：`spec` 描述期望，`status` 记录组件观察到的状态。例如希望三个副本，与当前就绪几个副本，是不同信息。提交新 spec 后，status 需要经过实际执行才会变化，通常不会在同一次请求中立即达到目标。
 
