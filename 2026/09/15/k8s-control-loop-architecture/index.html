@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>K8S学习笔记（一）从三个副本理解控制循环与架构 · OceanCT / Notes</title><meta name="description" content="从部署一个服务开始，理解 K8S 的期望状态、控制器、调度器、节点执行与服务入口，并规划 mini K8S 的实现路线。"><meta name="theme-color" content="#f7f6f2"><link rel="stylesheet" href="/blog/css/ocean.css"><meta name="generator" content="Hexo 5.4.2"></head>
+<body><a class="skip" href="#main">跳到内容</a><div class="site"><header class="header"><a class="brand" href="/blog/" aria-label="OceanCT 首页"><span class="brand-mark">o.</span> OceanCT<span class="brand-slash"> / notes</span></a><nav aria-label="主导航"><a class="" href="/blog/">首页</a><a class="" href="/blog/archives/">归档</a><a class="" href="/blog/columns/">专栏</a><a href="https://github.com/OceanCT" target="_blank" rel="noopener noreferrer">GitHub ↗</a></nav></header><main id="main">
+<div class="post-back"><a href="/blog/columns/k8s/">← K8S 专栏</a></div><article class="post"><header class="post-header"><div class="eyebrow"><time datetime="2026-09-15">2026.09.15</time> / LEARNING NOTES</div><h1>K8S学习笔记（一）从三个副本理解控制循环与架构</h1><p class="post-description">从部署一个服务开始，理解 K8S 的期望状态、控制器、调度器、节点执行与服务入口，并规划 mini K8S 的实现路线。</p><div class="post-tags"><a href="/blog/tags/K8S/">K8S</a><a href="/blog/tags/%E7%B3%BB%E7%BB%9F%E8%AE%BE%E8%AE%A1/">系统设计</a></div></header><div class="post-grid"><div class="prose"><p>假设我们已经写好一个 HTTP 服务，把它打成容器镜像，并在一台机器上启动。程序能处理请求之后，新的问题很快出现：进程退出了谁来重启，机器坏了去哪里补实例，访问量增加后怎样扩到三个副本，发布新版本时怎样避免同时停掉所有旧实例？</p>
+<p>如果只有一两台机器，可以通过脚本和人工处理。机器与服务越来越多以后，脚本还要知道每台机器的剩余资源、当前版本、健康状态和网络入口，失败后还要判断哪些操作已经完成。Kubernetes，也就是 K8S，主要解决的就是这种跨机器运行容器化应用的管理问题。</p>
+<p>这是 K8S 专栏的第一篇。我们从“让一个服务保持三个可用副本”出发，理解它怎样工作，再规划一个能够手搓出来的最小控制系统。</p>
+<h2 id="容器启动之后，还有哪些事情要管理"><a href="#容器启动之后，还有哪些事情要管理" class="headerlink" title="容器启动之后，还有哪些事情要管理"></a>容器启动之后，还有哪些事情要管理</h2><p>容器镜像封装程序和依赖，容器运行时负责创建、启动和停止容器。它们让“用同一份程序运行一个实例”更容易，但集群还需要回答：这个实例放在哪台机器上？它退出以后是否重启？整台机器不可用以后是否补新实例？用户应该访问哪个地址？</p>
+<p>我们给这项服务定一个目标：运行三个副本，对外提供稳定入口，新版本逐步替换旧版本。这样就有了几类相互关联的任务：</p>
+<table>
+<thead>
+<tr>
+<th>需要管理的事情</th>
+<th>对这个服务意味着什么</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>副本数量</td>
+<td>少了一个实例，要能发现并补齐</td>
+</tr>
+<tr>
+<td>资源与放置</td>
+<td>为实例选择满足 CPU、内存及其他约束的机器</td>
+</tr>
+<tr>
+<td>服务发现</td>
+<td>实例地址变化后，调用方仍能找到服务</td>
+</tr>
+<tr>
+<td>健康状态</td>
+<td>区分进程还活着与已经可以接流量</td>
+</tr>
+<tr>
+<td>版本更新</td>
+<td>控制新旧实例的替换速度，观察新版本是否可用</td>
+</tr>
+</tbody></table>
+<p>这些目标需要不同组件协作。K8S 不会自动修好业务代码，也不保证任何故障下都零中断；它提供描述目标、观察运行状态、持续执行修正的机制。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/overview/components/">官方组件概览</a>。</p>
+<h2 id="最重要的变化：从执行命令到维护目标"><a href="#最重要的变化：从执行命令到维护目标" class="headerlink" title="最重要的变化：从执行命令到维护目标"></a>最重要的变化：从执行命令到维护目标</h2><p>直接写脚本时，我们通常说：“去机器 A 启动一个容器。”命令结束以后，容器可能过五分钟就退出；除非另外写监控与恢复逻辑，这条命令已经完成了自己的工作。</p>
+<p>使用 K8S 时，我们更常表达：“这个应用应该有三个副本，使用指定镜像。”这是一份持续有效的期望。系统不断观察现实，如果当前受管理的副本不足，就执行创建；后续我们把期望改为五个，系统再逐步补到五个。</p>
+<p>这种反复比较期望与现实的过程叫 <strong>reconciliation，调谐</strong>。执行它的程序叫 <strong>controller，控制器</strong>。控制器不是只响应一次创建请求，它要在对象变化、失败和重试之后继续使系统接近期望状态。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/architecture/controller/">控制器机制</a>。</p>
+<p>可以用下面的伪代码理解调谐。它省略了并发、正在删除的对象和创建失败等细节：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">while</span> running:</span><br><span class="line">    desired = read_desired_replicas()</span><br><span class="line">    actual = list_owned_active_instances()</span><br><span class="line">    <span class="keyword">if</span> <span class="built_in">len</span>(actual) &lt; desired:</span><br><span class="line">        create_missing_instances(desired - <span class="built_in">len</span>(actual))</span><br><span class="line">    <span class="keyword">elif</span> <span class="built_in">len</span>(actual) &gt; desired:</span><br><span class="line">        remove_excess_instances(<span class="built_in">len</span>(actual) - desired)</span><br><span class="line">    wait_for_change_or_retry()</span><br></pre></td></tr></table></figure>
+
+<p>这里还有一个容易误解的地方：三个对象存在，不代表三个实例已经能提供服务。副本管理、容器健康、流量就绪分别有自己的判断。K8S 通过多个控制过程协作，而不是用一个数字覆盖所有状态。</p>
+<h2 id="先认识几个对象，再看架构"><a href="#先认识几个对象，再看架构" class="headerlink" title="先认识几个对象，再看架构"></a>先认识几个对象，再看架构</h2><p><strong>Node</strong> 是集群中的工作节点，可以是一台物理机或虚拟机。<strong>Pod</strong> 是 K8S 调度和管理的基本工作负载单元，包含一个或多个紧密协作的容器。同一 Pod 的容器共享网络环境，并可以挂载共享卷；它们作为一个整体安排到同一个 Node。Pod 也经常只有一个业务容器。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/">Pod 定义与生命周期</a>。</p>
+<p>对于这个无状态 HTTP 服务，可以使用 <strong>Deployment</strong> 描述部署目标。Deployment 管理版本变化，并通过 <strong>ReplicaSet</strong> 管理一组副本；ReplicaSet 根据模板和目标数量创建或删除 Pod。平时说“Deployment 启动了三个 Pod”是一种简写，中间还有这层控制关系。</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">Deployment：应用版本和更新策略</span><br><span class="line">  └─ ReplicaSet：某一版模板的副本数量</span><br><span class="line">       ├─ Pod A</span><br><span class="line">       ├─ Pod B</span><br><span class="line">       └─ Pod C</span><br></pre></td></tr></table></figure>
+
+<p>更新镜像后，Deployment 可以创建新的 ReplicaSet，逐渐扩容新版本、缩容旧版本。原来的 Pod 不会原地变成另一台机器上的同一个 Pod；替换出来的是具有新身份的 Pod。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/workloads/controllers/deployment/">Deployment 与 ReplicaSet 的关系</a>。</p>
+<p>对象中经常出现两个字段：<code>spec</code> 描述期望，<code>status</code> 记录组件观察到的状态。例如希望三个副本，与当前就绪几个副本，是不同信息。提交新 spec 后，status 需要经过实际执行才会变化，通常不会在同一次请求中立即达到目标。</p>
+<h2 id="整体架构：谁记录目标，谁真正执行"><a href="#整体架构：谁记录目标，谁真正执行" class="headerlink" title="整体架构：谁记录目标，谁真正执行"></a>整体架构：谁记录目标，谁真正执行</h2><p>K8S 集群通常分为控制平面和工作节点。控制平面管理集群对象、作出调度与控制决策，工作节点运行应用容器。先把主要关系画出来：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">用户 / kubectl</span><br><span class="line">      │ API 请求</span><br><span class="line">      ▼</span><br><span class="line">kube-apiserver ↔ etcd</span><br><span class="line">      ▲</span><br><span class="line">      │ 读取、监听、更新集群对象</span><br><span class="line">      ├── controller-manager</span><br><span class="line">      ├── scheduler</span><br><span class="line">      └── 各 Node 上的 kubelet</span><br><span class="line">                     │ CRI</span><br><span class="line">                     ▼</span><br><span class="line">                  容器运行时</span><br><span class="line">                     │</span><br><span class="line">                  应用容器</span><br></pre></td></tr></table></figure>
+
+<p>图中的连接主要表示控制信息流。业务 HTTP 请求走服务网络，通常不会经过 kube-apiserver。</p>
+<h3 id="API-Server-与-etcd：把集群状态变成可操作的对象"><a href="#API-Server-与-etcd：把集群状态变成可操作的对象" class="headerlink" title="API Server 与 etcd：把集群状态变成可操作的对象"></a>API Server 与 etcd：把集群状态变成可操作的对象</h3><p><code>kube-apiserver</code> 是 Kubernetes API 的入口，处理对象的读取与修改请求，并执行相应的认证、授权和准入处理。<code>kubectl</code> 是调用这个 API 的客户端工具，并不自己去每台机器启动容器。</p>
+<p><code>etcd</code> 保存集群的持久化配置和状态数据。它不是镜像仓库，也不是业务数据库，更不保存正在运行的容器进程。其他控制组件通常通过 API Server 读取和更新 Kubernetes 对象。</p>
+<h3 id="Controller-Manager：发现期望与实际的差异"><a href="#Controller-Manager：发现期望与实际的差异" class="headerlink" title="Controller Manager：发现期望与实际的差异"></a>Controller Manager：发现期望与实际的差异</h3><p><code>kube-controller-manager</code> 运行多种控制器，例如管理 ReplicaSet 的控制器。每个控制器负责特定对象关系和修正动作，使用 API 更新对象。它们不会因为“看见三个副本的要求”就直接在本机运行三个容器。</p>
+<h3 id="Scheduler：为尚未分配的-Pod-选择节点"><a href="#Scheduler：为尚未分配的-Pod-选择节点" class="headerlink" title="Scheduler：为尚未分配的 Pod 选择节点"></a>Scheduler：为尚未分配的 Pod 选择节点</h3><p><code>kube-scheduler</code> 观察尚未绑定 Node 的 Pod，根据资源需求和调度约束寻找合适节点。选择完成后，把绑定结果写回 API。</p>
+<p>调度结果说明 Pod 应该去哪里，实际启动还由对应 Node 的 kubelet 完成。没有满足条件的节点时，Pod 可以一直处于未调度状态；重新提交同一配置并不会创造更多 CPU 或内存。</p>
+<h3 id="Kubelet-与容器运行时：落实到机器上"><a href="#Kubelet-与容器运行时：落实到机器上" class="headerlink" title="Kubelet 与容器运行时：落实到机器上"></a>Kubelet 与容器运行时：落实到机器上</h3><p>每个工作节点上的 <code>kubelet</code> 关注分配给本节点的 Pod，通过 <strong>CRI（Container Runtime Interface）</strong> 与兼容的容器运行时交互，例如 containerd，落实容器的创建和运行，并报告状态。</p>
+<p>一个 kubelet 管理所在 Node 上的 Pod，因此整个 Node 失联时，不能期待这台机器上的 kubelet 在别处创建替代实例。跨节点的故障处理需要控制平面与其他节点共同参与。以上组件分工可对应到<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/overview/components/">官方架构说明</a>。</p>
+<h2 id="提交三个副本之后，究竟发生了什么"><a href="#提交三个副本之后，究竟发生了什么" class="headerlink" title="提交三个副本之后，究竟发生了什么"></a>提交三个副本之后，究竟发生了什么</h2><p>下面是一份 Deployment 示例，选择一个公开 HTTP 镜像，声明三个副本。它用于阅读对象结构，本篇没有向任何集群执行部署。</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">apiVersion:</span> <span class="string">apps/v1</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">Deployment</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">notes-web</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">replicas:</span> <span class="number">3</span></span><br><span class="line">  <span class="attr">selector:</span></span><br><span class="line">    <span class="attr">matchLabels:</span></span><br><span class="line">      <span class="attr">app:</span> <span class="string">notes-web</span></span><br><span class="line">  <span class="attr">template:</span></span><br><span class="line">    <span class="attr">metadata:</span></span><br><span class="line">      <span class="attr">labels:</span></span><br><span class="line">        <span class="attr">app:</span> <span class="string">notes-web</span></span><br><span class="line">    <span class="attr">spec:</span></span><br><span class="line">      <span class="attr">containers:</span></span><br><span class="line">        <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">web</span></span><br><span class="line">          <span class="attr">image:</span> <span class="string">nginx:1.27</span></span><br><span class="line">          <span class="attr">ports:</span></span><br><span class="line">            <span class="bullet">-</span> <span class="attr">containerPort:</span> <span class="number">80</span></span><br><span class="line">          <span class="attr">resources:</span></span><br><span class="line">            <span class="attr">requests:</span></span><br><span class="line">              <span class="attr">cpu:</span> <span class="string">&quot;100m&quot;</span></span><br><span class="line">              <span class="attr">memory:</span> <span class="string">&quot;64Mi&quot;</span></span><br><span class="line">          <span class="attr">readinessProbe:</span></span><br><span class="line">            <span class="attr">httpGet:</span></span><br><span class="line">              <span class="attr">path:</span> <span class="string">/</span></span><br><span class="line">              <span class="attr">port:</span> <span class="number">80</span></span><br></pre></td></tr></table></figure>
+
+<p><code>replicas</code> 表示期望数量；<code>template</code> 是创建 Pod 的模板。<code>labels</code> 是对象标签，<code>selector</code> 用它识别要管理的对象。这里 <code>100m</code> 表示 0.1 个 CPU 的请求量，<code>64Mi</code> 是内存请求量；requests 参与调度资源核算，不等于配置了资源使用上限，limits 是另一个设置。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/">资源请求与限制</a>。</p>
+<p>假设通过 <code>kubectl apply</code> 提交它，正常路径大致如下：</p>
+<ol>
+<li>API Server 接受并保存 Deployment 对象。请求成功说明对象已提交，不代表容器已经运行。</li>
+<li>Deployment 控制器管理对应 ReplicaSet，ReplicaSet 控制器创建缺少的 Pod 对象。</li>
+<li>Scheduler 为尚未绑定的 Pod 选择节点。</li>
+<li>各节点 kubelet 根据 Pod 配置让运行时拉取镜像、启动容器，并进行相关健康检查。</li>
+<li>运行状态回报后，我们才能观察哪些 Pod 已运行、哪些已经 Ready。</li>
+</ol>
+<p>这些动作通过对象状态协作，不是一条要求所有组件同时成功的同步函数调用。调度失败、镜像拉取失败、应用启动失败，都会停在不同位置，排查时应找到最后已完成的阶段。</p>
+<h2 id="Pod-的地址会变化，访问入口怎么办"><a href="#Pod-的地址会变化，访问入口怎么办" class="headerlink" title="Pod 的地址会变化，访问入口怎么办"></a>Pod 的地址会变化，访问入口怎么办</h2><p>三个 Pod 可能拥有不同 IP，替换后 IP 还可能变化。可以再创建一个 <strong>Service</strong>，用相同的 <code>app: notes-web</code> 标签选择后端。常见的 ClusterIP Service 提供集群内部稳定的访问入口，EndpointSlice 记录对应后端端点及其状态。</p>
+<p>节点网络上的代理或等价实现据此转发连接。常见组件是 <code>kube-proxy</code>，某些网络方案会使用其他实现；Pod 网络连通性通常还涉及 CNI 网络插件。Service 对象本身不是一个运行 HTTP 业务的进程。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/services-networking/service/">Service 官方说明</a>。</p>
+<p>如果需要从集群外访问，还要根据环境配置 LoadBalancer、Ingress、Gateway 等入口能力；声明一个普通 ClusterIP Service 并不会自动获得可从互联网访问的地址。Pod 的持久数据则需要卷与存储系统支持，也不能因为副本能重建就认为业务数据已经得到保护。</p>
+<h2 id="进程退出、没有就绪、整台机器失联，处理不同"><a href="#进程退出、没有就绪、整台机器失联，处理不同" class="headerlink" title="进程退出、没有就绪、整台机器失联，处理不同"></a>进程退出、没有就绪、整台机器失联，处理不同</h2><p>假设容器进程退出，kubelet 可以按重启策略在原 Pod 内重启容器。Pod 仍可能是原来的身份，只是容器重启次数增加。假设 Pod 被删除，ReplicaSet 观察到受管理副本不足，会创建新的 Pod。整个节点失联时，还需要故障检测、节点与 Pod 状态处理以及可能的驱逐、替换过程，不会瞬间把旧 Pod 平移到另一台机器。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/">Pod 生命周期</a>。</p>
+<p>健康检查也有不同目的。<strong>Readiness</strong> 表示当前是否适合接流量；失败通常让该 Pod 不再作为就绪后端接收常规 Service 流量，并不直接触发容器重启。<strong>Liveness</strong> 用于发现需要重启的容器。<strong>Startup</strong> 给启动较慢的应用留出时间，成功前会抑制配置的 liveness 和 readiness 检查。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/workloads/pods/probes/">探针说明</a>。</p>
+<p>例如应用进程已经启动，但必要依赖尚未准备好，就可能 Running 而未 Ready。又比如业务数据库暂时变慢，把它直接作为 liveness 失败条件，可能导致大量容器反复重启。探针应该表达我们希望系统采取的动作，而不只是“某个 URL 是否返回成功”。</p>
+<h2 id="为什么需要持续调谐，而不是一次执行到底"><a href="#为什么需要持续调谐，而不是一次执行到底" class="headerlink" title="为什么需要持续调谐，而不是一次执行到底"></a>为什么需要持续调谐，而不是一次执行到底</h2><p>分布式系统中的观察可能落后，写入可能冲突，请求可能成功但响应丢失。因此，控制器必须考虑重复观察与重试。假设创建请求超时，下一轮应重新读取当前对象，确认实际是否已经创建，避免只因没收到响应就持续增加副本。</p>
+<p>实际控制逻辑比“数一数少几个”复杂，还要考虑对象归属、正在创建或删除的实例、版本冲突和重试退避。控制器倾向于围绕当前状态重新决策，而不是依赖某条事件恰好只被处理一次。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/architecture/controller/">控制器设计</a>。</p>
+<p>这种机制也有边界：如果镜像不存在，或者所有节点都不满足资源需求，系统会继续报告无法收敛的状态，需要人或其他系统改变条件。声明期望提供了修正目标，不意味着任何目标都能自动实现。</p>
+<h2 id="后续怎样手搓一个-Mini-K8S"><a href="#后续怎样手搓一个-Mini-K8S" class="headerlink" title="后续怎样手搓一个 Mini K8S"></a>后续怎样手搓一个 Mini K8S</h2><p>可以做，但第一版目标应当是重现控制过程，让每个组件的作用可以观察。我们先规划一个本地模拟器：用普通任务对象代表 Pod，用模拟 Worker 代表 Node。后续再接本地进程或容器运行时，逐步加入真实执行。</p>
+<p>第一版只处理一种无状态服务的副本管理，可以把 Deployment 与 ReplicaSet 的两层关系暂时简化为一个 <code>Workload</code>。这是学习版本的取舍，真实 Kubernetes 仍使用前面讲的对象层次。</p>
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>手搓内容</th>
+<th>完成后应该能观察到什么</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1. 对象与存储</td>
+<td>Workload、Pod、Node，分开保存 spec 和 status</td>
+<td>修改期望数量后，运行状态不会凭空同步变化</td>
+</tr>
+<tr>
+<td>2. 副本控制器</td>
+<td>对比目标与已有对象，补齐或缩减</td>
+<td>目标从 1 改为 3，最终出现三个实例对象</td>
+</tr>
+<tr>
+<td>3. 调度器</td>
+<td>选择资源够用且可用的节点，写入绑定</td>
+<td>无资源时保持 Pending，有资源后继续调度</td>
+</tr>
+<tr>
+<td>4. Worker</td>
+<td>处理已绑定任务，报告运行和就绪状态</td>
+<td>容器启动与 Pod 创建表现为不同阶段</td>
+</tr>
+<tr>
+<td>5. 故障与重试</td>
+<td>模拟进程退出、节点失联、创建超时</td>
+<td>能补实例，重复调谐不无限创建</td>
+</tr>
+<tr>
+<td>6. 流量与更新</td>
+<td>维护就绪后端集合，逐步替换版本</td>
+<td>未就绪实例不接流量，新旧版本可以并存过渡</td>
+</tr>
+</tbody></table>
+<p>在这套学习系统中，我们还可以给每次调谐记录“读到了什么、认为缺什么、提交了什么修改”，用日志还原控制循环。验收应包括重复执行、资源不足、控制器重启和节点恢复等场景，而不只演示一次正常启动。</p>
+<p>这篇先建立架构与数据流。后续实现可以从“期望三个、实际一个，控制器怎样可靠地补两个”开始；等这个过程能够在失败和重试下稳定工作，再增加调度与真实容器执行。</p>
+<p><a href="/blog/columns/k8s/">返回 K8S 专栏</a></p>
+</div><aside class="toc"><div class="side-label">ON THIS PAGE</div><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%AE%B9%E5%99%A8%E5%90%AF%E5%8A%A8%E4%B9%8B%E5%90%8E%EF%BC%8C%E8%BF%98%E6%9C%89%E5%93%AA%E4%BA%9B%E4%BA%8B%E6%83%85%E8%A6%81%E7%AE%A1%E7%90%86"><span class="toc-text">容器启动之后，还有哪些事情要管理</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%9C%80%E9%87%8D%E8%A6%81%E7%9A%84%E5%8F%98%E5%8C%96%EF%BC%9A%E4%BB%8E%E6%89%A7%E8%A1%8C%E5%91%BD%E4%BB%A4%E5%88%B0%E7%BB%B4%E6%8A%A4%E7%9B%AE%E6%A0%87"><span class="toc-text">最重要的变化：从执行命令到维护目标</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%88%E8%AE%A4%E8%AF%86%E5%87%A0%E4%B8%AA%E5%AF%B9%E8%B1%A1%EF%BC%8C%E5%86%8D%E7%9C%8B%E6%9E%B6%E6%9E%84"><span class="toc-text">先认识几个对象，再看架构</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%95%B4%E4%BD%93%E6%9E%B6%E6%9E%84%EF%BC%9A%E8%B0%81%E8%AE%B0%E5%BD%95%E7%9B%AE%E6%A0%87%EF%BC%8C%E8%B0%81%E7%9C%9F%E6%AD%A3%E6%89%A7%E8%A1%8C"><span class="toc-text">整体架构：谁记录目标，谁真正执行</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#API-Server-%E4%B8%8E-etcd%EF%BC%9A%E6%8A%8A%E9%9B%86%E7%BE%A4%E7%8A%B6%E6%80%81%E5%8F%98%E6%88%90%E5%8F%AF%E6%93%8D%E4%BD%9C%E7%9A%84%E5%AF%B9%E8%B1%A1"><span class="toc-text">API Server 与 etcd：把集群状态变成可操作的对象</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Controller-Manager%EF%BC%9A%E5%8F%91%E7%8E%B0%E6%9C%9F%E6%9C%9B%E4%B8%8E%E5%AE%9E%E9%99%85%E7%9A%84%E5%B7%AE%E5%BC%82"><span class="toc-text">Controller Manager：发现期望与实际的差异</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Scheduler%EF%BC%9A%E4%B8%BA%E5%B0%9A%E6%9C%AA%E5%88%86%E9%85%8D%E7%9A%84-Pod-%E9%80%89%E6%8B%A9%E8%8A%82%E7%82%B9"><span class="toc-text">Scheduler：为尚未分配的 Pod 选择节点</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Kubelet-%E4%B8%8E%E5%AE%B9%E5%99%A8%E8%BF%90%E8%A1%8C%E6%97%B6%EF%BC%9A%E8%90%BD%E5%AE%9E%E5%88%B0%E6%9C%BA%E5%99%A8%E4%B8%8A"><span class="toc-text">Kubelet 与容器运行时：落实到机器上</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%8F%90%E4%BA%A4%E4%B8%89%E4%B8%AA%E5%89%AF%E6%9C%AC%E4%B9%8B%E5%90%8E%EF%BC%8C%E7%A9%B6%E7%AB%9F%E5%8F%91%E7%94%9F%E4%BA%86%E4%BB%80%E4%B9%88"><span class="toc-text">提交三个副本之后，究竟发生了什么</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Pod-%E7%9A%84%E5%9C%B0%E5%9D%80%E4%BC%9A%E5%8F%98%E5%8C%96%EF%BC%8C%E8%AE%BF%E9%97%AE%E5%85%A5%E5%8F%A3%E6%80%8E%E4%B9%88%E5%8A%9E"><span class="toc-text">Pod 的地址会变化，访问入口怎么办</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E8%BF%9B%E7%A8%8B%E9%80%80%E5%87%BA%E3%80%81%E6%B2%A1%E6%9C%89%E5%B0%B1%E7%BB%AA%E3%80%81%E6%95%B4%E5%8F%B0%E6%9C%BA%E5%99%A8%E5%A4%B1%E8%81%94%EF%BC%8C%E5%A4%84%E7%90%86%E4%B8%8D%E5%90%8C"><span class="toc-text">进程退出、没有就绪、整台机器失联，处理不同</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%BA%E4%BB%80%E4%B9%88%E9%9C%80%E8%A6%81%E6%8C%81%E7%BB%AD%E8%B0%83%E8%B0%90%EF%BC%8C%E8%80%8C%E4%B8%8D%E6%98%AF%E4%B8%80%E6%AC%A1%E6%89%A7%E8%A1%8C%E5%88%B0%E5%BA%95"><span class="toc-text">为什么需要持续调谐，而不是一次执行到底</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%90%8E%E7%BB%AD%E6%80%8E%E6%A0%B7%E6%89%8B%E6%90%93%E4%B8%80%E4%B8%AA-Mini-K8S"><span class="toc-text">后续怎样手搓一个 Mini K8S</span></a></li></ol></aside></div><nav class="post-navigation" aria-label="专栏阅读顺序"><a href="/blog/columns/k8s/">专栏目录<br>1 / 1</a></nav></article></main><footer><span>© 2026 OceanCT</span><span>保持好奇，把理解留下来。<span class="footer-dot">●</span></span><a href="#main">回到顶部 ↑</a></footer></div><script src="/blog/js/ocean.js" defer></script></body></html>

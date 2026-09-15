@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>OceanCT 的 Humanize Skill · OceanCT / Notes</title><meta name="description" content="从改稿时观察到的差异出发，介绍 OceanCT Humanize Skill 的讲解逻辑与表达风格，附独立 Skill 下载。"><meta name="theme-color" content="#f7f6f2"><link rel="stylesheet" href="/blog/css/ocean.css"><meta name="generator" content="Hexo 5.4.2"></head>
+<body><a class="skip" href="#main">跳到内容</a><div class="site"><header class="header"><a class="brand" href="/blog/" aria-label="OceanCT 首页"><span class="brand-mark">o.</span> OceanCT<span class="brand-slash"> / notes</span></a><nav aria-label="主导航"><a class="" href="/blog/">首页</a><a class="" href="/blog/archives/">归档</a><a class="" href="/blog/columns/">专栏</a><a href="https://github.com/OceanCT" target="_blank" rel="noopener noreferrer">GitHub ↗</a></nav></header><main id="main">
+<div class="post-back"><a href="/blog/columns/skills/">← 实用 Skill 专栏</a></div><article class="post"><header class="post-header"><div class="eyebrow"><time datetime="2026-09-14">2026.09.14</time> / LEARNING NOTES</div><h1>OceanCT 的 Humanize Skill</h1><p class="post-description">从改稿时观察到的差异出发，介绍 OceanCT Humanize Skill 的讲解逻辑与表达风格，附独立 Skill 下载。</p><div class="post-tags"><a href="/blog/tags/%E5%B7%A5%E5%85%B7/">工具</a><a href="/blog/tags/Skills/">Skills</a><a href="/blog/tags/%E5%86%99%E4%BD%9C/">写作</a></div></header><div class="post-grid"><div class="prose"><p>自己用 AI 写文章时，我总觉得生成的文字有股很浓的 AI 味。试过一些现成的 Humanize Skill，读起来有所改善，但还是不太属于自己的风格。于是就有了这份 OceanCT 的 Humanize Skill：拿自己会怎么说、怎么写作参照，把几次改稿中反复在意的地方整理成规则。</p>
+<p>每个人喜欢的表达都不一样。你可以参考这份 skill，也可以拿自己的文章和 AI 的初稿对照，写一份符合自己习惯的 Humanize Skill。</p>
+<p><a href="/blog/downloads/oceanct-humanize-SKILL.txt">下载 OceanCT 的 Humanize Skill</a></p>
+<p>附件是完整的独立版本，指令用英文编写，适用于中文学习笔记和技术博客。下载后保存为 <code>oceanct-humanize/SKILL.md</code>，放进所用工具支持的 skill 目录；也可以直接把文件内容和原稿一起交给 AI，让它按这些要求改写。有自己的写作样稿时，一并附上会更方便表达偏好。</p>
+<h2 id="讲解逻辑：让读者跟得上"><a href="#讲解逻辑：让读者跟得上" class="headerlink" title="讲解逻辑：让读者跟得上"></a>讲解逻辑：让读者跟得上</h2><p>改 Agent 学习笔记时，有一句话让我停了下来：</p>
+<blockquote>
+<p>全文沿用一个技术调研助手的例子。</p>
+</blockquote>
+<p>这句话交代了文章的安排，但我读到这里，还不知道这个助手到底要做什么。如果自己来讲，我会直接说：“我们以调研一种压缩技术为例。”然后接着解释要调研什么、怎样查资料、怎样比较结果。例子开始了，后面的讨论才有落脚的地方。</p>
+<p>选什么例子也有讲究。我们当时讨论过，介绍 Agent 的开头不适合用“调研 Agent 的记忆方案”来举例。读者还没有理解 Agent，又要先弄明白它的记忆方案，就很难借这个例子理解前面的概念。这也是“用已知解释未知”的来由：先选读者熟悉的事情，理解它不需要提前学会我们正在讲的新知识。</p>
+<p>有了熟悉的例子，还需要明确接到新问题上。比如讲过现有的调研流程之后，再问：“假设现在想设计一个 Agent 来完成同样的任务，参照这套流程，我们应该怎么做？”这样就能从需求、查证、工作记录和审阅中，逐步找到新系统需要考虑的问题。</p>
+<p>这里对应另一条规则：“从旧系统推导新系统”。旧系统可以是人工流程，也可以是已有的软件或组织协作。我们借鉴它完成任务的经验，同时看看条件变了以后，哪些机制需要重新设计。比如原先的工作记录启发我们保存 Agent 的任务进度，但程序中断后怎样恢复、会不会重复写入文件，还需要继续分析。</p>
+<p>这几条规则都来自同一种阅读感受：有些初稿里的概念已经列齐了，相邻段落却没有把关系讲出来。我希望读者能知道，为什么说完这一件事，接下来就该讨论另一件事。</p>
+<h2 id="表达风格：保留讲述的节奏"><a href="#表达风格：保留讲述的节奏" class="headerlink" title="表达风格：保留讲述的节奏"></a>表达风格：保留讲述的节奏</h2><p>另一些地方涉及句子怎么组织。比如我在描述自己想要的开头时，会说：</p>
+<blockquote>
+<p>这是我系统学习 Agent 的第一篇笔记，我们先从这几个问题谈起。从宏观上看，设计一个 Agent 会涉及执行编排、记忆管理和工具调用，也会遇到多个 Agent 之间如何协作的问题。</p>
+</blockquote>
+<p>“从宏观上看”在这里说明了讨论的层次，后一句也顺势把几个相关的问题连了起来。我喜欢这种展开的节奏，所以在规则里保留了“有用的过渡”和“允许句子舒展”。删掉多余的话之后，仍然要让一句话能够接住上一句。</p>
+<p>正文的组织也一样。最初的笔记把不少内容拆成表格和要求清单，查找起来方便，连续读却更像一份提纲。后来我们把其中需要解释因果和来龙去脉的部分写回段落，比较概念的地方继续用表格。这就成了“正文优先讲解”：选择形式时，要看这段内容是在解释一个问题，还是在并列比较几件事情。</p>
+<p>至于口述里的“嗯”、重复起头和转写错误，可以整理掉。想留下的是思路展开的方式，不需要特意加入口头禅。同样，改写也不能补造经历，或者为了读起来顺畅，删掉技术结论的适用条件。</p>
+<p>这些偏好在<a href="/blog/2026/09/14/agent-design-foundations/">《Agent学习笔记（一）Agent设计中的几个问题》</a>里做了一次尝试。以后用到自己的文章上，也可以从一两段开始：把读着不舒服的地方圈出来，写下自己会怎么讲，再看看差别究竟在讲解逻辑，还是表达习惯。</p>
+</div><aside class="toc"><div class="side-label">ON THIS PAGE</div><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E8%AE%B2%E8%A7%A3%E9%80%BB%E8%BE%91%EF%BC%9A%E8%AE%A9%E8%AF%BB%E8%80%85%E8%B7%9F%E5%BE%97%E4%B8%8A"><span class="toc-text">讲解逻辑：让读者跟得上</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E8%A1%A8%E8%BE%BE%E9%A3%8E%E6%A0%BC%EF%BC%9A%E4%BF%9D%E7%95%99%E8%AE%B2%E8%BF%B0%E7%9A%84%E8%8A%82%E5%A5%8F"><span class="toc-text">表达风格：保留讲述的节奏</span></a></li></ol></aside></div><nav class="post-navigation" aria-label="专栏阅读顺序"><a href="/blog/columns/skills/">专栏目录<br>1 / 1</a></nav></article></main><footer><span>© 2026 OceanCT</span><span>保持好奇，把理解留下来。<span class="footer-dot">●</span></span><a href="#main">回到顶部 ↑</a></footer></div><script src="/blog/js/ocean.js" defer></script></body></html>

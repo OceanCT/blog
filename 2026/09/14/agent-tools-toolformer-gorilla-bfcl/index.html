@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Agent学习笔记（四）工具调用如何学会，又如何验收 · OceanCT / Notes</title><meta name="description" content="先讲 Toolformer、Gorilla 的工具学习与调用生成方法，再介绍 BFCL benchmark 的题目与判分，区分方法设计和能力评测。"><meta name="theme-color" content="#f7f6f2"><link rel="stylesheet" href="/blog/css/ocean.css"><meta name="generator" content="Hexo 5.4.2"></head>
+<body><a class="skip" href="#main">跳到内容</a><div class="site"><header class="header"><a class="brand" href="/blog/" aria-label="OceanCT 首页"><span class="brand-mark">o.</span> OceanCT<span class="brand-slash"> / notes</span></a><nav aria-label="主导航"><a class="" href="/blog/">首页</a><a class="" href="/blog/archives/">归档</a><a class="" href="/blog/columns/">专栏</a><a href="https://github.com/OceanCT" target="_blank" rel="noopener noreferrer">GitHub ↗</a></nav></header><main id="main">
+<div class="post-back"><a href="/blog/columns/agent/">← Agent 专栏</a></div><article class="post"><header class="post-header"><div class="eyebrow"><time datetime="2026-09-14">2026.09.14</time> / LEARNING NOTES</div><h1>Agent学习笔记（四）工具调用如何学会，又如何验收</h1><p class="post-description">先讲 Toolformer、Gorilla 的工具学习与调用生成方法，再介绍 BFCL benchmark 的题目与判分，区分方法设计和能力评测。</p><div class="post-tags"><a href="/blog/tags/Agent/">Agent</a><a href="/blog/tags/%E8%AE%BA%E6%96%87/">论文</a><a href="/blog/tags/ToolCalling/">ToolCalling</a></div></header><div class="post-grid"><div class="prose"><p>我们已经有了调研计划，也知道怎样保存资料，但助手最后还得做一些具体的事：搜索论文、读取 PDF、计算压缩率、把报告写入文件。原来的调研者会根据需要打开不同软件；假设把这些工作交给 Agent，就要把能力整理成它能理解和调用的接口。</p>
+<p>最初可能只有两个工具，随着任务增加，列表里会出现多个相似的搜索接口、不同版本的文档服务，以及参数各不相同的计算工具。模型既要判断是否需要调用，也要选对接口、填写参数，并理解返回结果。Toolformer 和 Gorilla 研究怎样获得或改善工具调用能力；BFCL 是检验这些能力的 benchmark（评测基准）。我们先讲训练与生成方法，再单独看评测题目和判分规则。</p>
+<h2 id="Toolformer：从哪里获得“什么时候用工具”的训练数据"><a href="#Toolformer：从哪里获得“什么时候用工具”的训练数据" class="headerlink" title="Toolformer：从哪里获得“什么时候用工具”的训练数据"></a>Toolformer：从哪里获得“什么时候用工具”的训练数据</h2><p>假设助手正在写压缩率，手上有原始字节数和压缩后字节数。它可以自己生成一个数字，也可以调用计算器。我们希望它在需要精确计算时选择后者，但如果每个训练样本都靠人手工标注调用位置和参数，成本会很高。</p>
+<p>2023 年的 <a target="_blank" rel="noopener" href="https://arxiv.org/abs/2302.04761v1">Toolformer</a> 用少量工具示例引导模型，在普通文本中采样候选 API 调用。随后执行候选，检查调用结果是否降低后续文本的预测损失，把有帮助的调用保留下来，形成增强数据，再微调模型。论文研究的工具包括计算器、问答、搜索、翻译和日历。</p>
+<p><img src="/blog/images/agent-papers/toolformer-figure2.png" alt="Toolformer 原论文 Figure 2：采样、执行、筛选 API 调用"></p>
+<p>图源：Schick 等，<em>Toolformer: Language Models Can Teach Themselves to Use Tools</em>，<a target="_blank" rel="noopener" href="https://arxiv.org/pdf/2302.04761v1#page=2">arXiv v1，第 2 页 Figure 2</a>。</p>
+<p>图里值得留意的是第三步：调用能成功返回，只说明工具执行了；训练数据还要检查返回的信息是否帮助模型预测后续内容。论文把“得到调用及结果”的损失，与“不调用”和“有调用但不给结果”的基线比较，达到筛选阈值才保留。</p>
+<p>这里确实有训练过程。把工具描述写进 prompt，让已有模型现场决定调用，与 Toolformer 的数据构造和微调属于不同环节。迁移到我们的计算任务时，也还要另做业务验证：模型可能准确算出了一个比值，却把“压缩后占比”和“节省比例”混在一起。训练信号无法直接替代字段语义和最终结果检查。</p>
+<h2 id="Gorilla：怎样把一个需求变成具体的-API-调用"><a href="#Gorilla：怎样把一个需求变成具体的-API-调用" class="headerlink" title="Gorilla：怎样把一个需求变成具体的 API 调用"></a>Gorilla：怎样把一个需求变成具体的 API 调用</h2><p>假设用户说：“我想识别照片里的动物，模型要小一点。”我们最终需要交给程序执行的，却可能是一个包含仓库名、模型名和选项的函数调用。这里至少有两次转换：先理解任务需要什么能力，再从可用接口中选择具体实现、写出参数。模型可能知道什么是图像分类，却记错模型仓库，或者编出一个看似合理的 API。</p>
+<p>2023 年的 Gorilla 就研究这段转换。它的核心设想是：用真实 API 文档构造专门的指令训练数据，让模型学习“需求对应哪种调用”；再让训练输入包含参考文档，使模型能够依据推理时提供的文档调整调用。这里的 Gorilla 是基于 LLaMA-7B 微调的模型及相应方法，APIBench 是作者构建的数据集。下面按 <a target="_blank" rel="noopener" href="https://arxiv.org/abs/2305.15334v1">Gorilla 的 2023 年 v1 原论文</a> 展开。</p>
+<h3 id="训练样本从哪里来"><a href="#训练样本从哪里来" class="headerlink" title="训练样本从哪里来"></a>训练样本从哪里来</h3><p>作者收集了 Hugging Face、Torch Hub 和 TensorFlow Hub 的 API 资料。它们主要涉及机器学习模型的加载与使用，例如图像分类、目标检测和文本生成。文档被整理成结构化记录，包含接口名称、功能、调用形式、参数、环境要求、示例代码和性能信息。这样，训练目标就有真实接口作为依据。</p>
+<p>但文档通常从“这个接口有什么用”出发，用户从“我想做什么”出发。为了补上两者之间的对应关系，作者让 GPT-4 阅读文档，生成可能需要这个 API 的自然语言需求，并要求需求中不要直接透露 API 名称。否则，“请调用某某接口”会把选工具这一步的答案写进题目。</p>
+<p>这一步采用 Self-Instruct 的方式：先为三个模型平台各手写 6 个“需求—API”示例，再从相应平台的示例中取 3 个，连同新文档一起提供给 GPT-4。论文报告为 1,645 条 API 记录各生成 10 组指令与调用配对。这里的 GPT-4 用来生成训练材料，部署 Gorilla 时无需再让 GPT-4 替它作答。<a target="_blank" rel="noopener" href="https://arxiv.org/pdf/2305.15334v1#page=3">数据构造依据：原论文第 3.1 节</a>。</p>
+<p>可以把一条样本理解成下面的关系。这个例子用于解释样本结构，调用形式取自论文讨论的 Torch Hub 接口：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">输入需求：给我一个可以做图像分类的 DenseNet-121 模型。</span><br><span class="line">目标调用：torch.hub.load(&#x27;pytorch/vision&#x27;, &#x27;densenet121&#x27;, pretrained=True)</span><br></pre></td></tr></table></figure>
+
+<p>其中 <code>torch.hub.load</code> 是加载函数，<code>pytorch/vision</code> 指明模型仓库，<code>densenet121</code> 指明模型。只把函数名写对还不够，后两个参数共同决定加载什么。论文还讨论带约束的需求，例如“参数量小于 10M，ImageNet 准确率至少 70%”。这种题需要同时核对功能和性能条件，找到一个能加载的模型只是其中一步。</p>
+<h3 id="微调究竟教了什么，检索又发生在哪里"><a href="#微调究竟教了什么，检索又发生在哪里" class="headerlink" title="微调究竟教了什么，检索又发生在哪里"></a>微调究竟教了什么，检索又发生在哪里</h3><p>作者把每组需求与调用改成一轮用户—助手对话，对 LLaMA-7B 做标准指令微调。训练时，输入是需求，目标输出是参考 API 调用；模型通过预测目标输出更新权重。这里没有 Toolformer 那种“执行候选调用，再按后续文本损失筛选”的步骤，两者的数据来源和训练信号不同。</p>
+<p>Gorilla 还比较了带参考文档的训练方式。输入变为“用户需求 + 参考 API 文档”，目标仍然是正确调用。论文称它为 <strong>retriever-aware training</strong>，可以理解为让模型在训练中就练习根据文档完成调用，而不是只背需求与接口的对应关系。论文实验也使用正确参考文档进行训练，用来检验文档条件下的学习效果。</p>
+<p>到了实际推理时，文档检索在生成调用之前发生：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">用户需求</span><br><span class="line">  → 检索器在 API 文档库中寻找相关文档</span><br><span class="line">  → 把需求与检索文档一起放入 Gorilla 的输入</span><br><span class="line">  → Gorilla 生成函数名及参数</span><br><span class="line">  → 执行程序接收这个调用</span><br></pre></td></tr></table></figure>
+
+<p>论文比较了 BM25 和 GPT-Index 检索设置。BM25 主要依据查询与文档的词项匹配及权重排序；这里知道它负责选出参考文档，就能理解后续流程。Gorilla 也支持不检索、直接根据需求生成调用的模式，因此不能把“Gorilla”与“一个文档检索器”画等号。<a target="_blank" rel="noopener" href="https://arxiv.org/pdf/2305.15334v1#page=4">训练与推理依据：原论文第 3.2 节</a>。</p>
+<p>从 RAG 的角度看，带检索的 Gorilla 符合“先检索资料，再据此生成”的结构；它检索的是 API 文档，生成的是调用。Gorilla 在这个结构上研究了专门的数据构造和微调方式。普通模型临时收到一份文档，也可以尝试写调用；这里关心的是经过相应训练后，模型是否更能利用文档、遵守接口约束。</p>
+<p>这也解释了文档更新为什么有用。假设我们的文档服务把 <code>write_document(path, text)</code> 改为 <code>create_document(folder_id, content)</code>，检索到的新文档能向模型提供新的函数名和参数。模型需要依据它调整输出；文档不会自动修改权重，也不会保证运行端已经同步升级。原论文展示的是模型名称和模型仓库等 API 信息变化的案例，不能据此推断它能处理任意复杂的接口迁移。</p>
+<h3 id="作者怎样判断它真的改进了"><a href="#作者怎样判断它真的改进了" class="headerlink" title="作者怎样判断它真的改进了"></a>作者怎样判断它真的改进了</h3><p>首先要区分几种结果。调用符合需求是一种；调用了真实存在但不适合任务的 API 是另一种；生成了数据库中找不到的 API，又是另一种。最后一类被论文记为 hallucination，也就是这个基准定义下的虚构接口。选择错误的真实接口归入调用错误，不能与虚构接口混为同一个指标。</p>
+<p>作者用 <strong>AST（抽象语法树）</strong> 分析生成代码。它把代码拆成函数及参数等结构，因此不会只因空格或排版不同就判错。例如前面的调用可以拆出 <code>torch.hub.load</code>、仓库和模型参数，再与参考 API 的关键节点比较。论文会指定需要匹配哪些参数；其示例中检查仓库和模型，未要求可选的 <code>pretrained=True</code> 节点完全匹配。因此，这个分数依赖基准选定的检查条件，不能解释成执行环境中所有细节都已验证。<a target="_blank" rel="noopener" href="https://arxiv.org/pdf/2305.15334v1#page=5">判分依据：原论文第 3.3 节及 Figure 4</a>。</p>
+<p>实验把 Gorilla 与其他模型放到不同文档条件下比较：不提供文档、使用实际检索器，以及由 Oracle 直接提供正确参考文档。Oracle 是实验中的理想条件，用来观察“如果资料一定找对，生成端能做到什么”；它不是现实部署中已经解决的检索能力。</p>
+<p>这组比较支持了一个有条件的结论：专门的 API 指令微调能改善该基准中的调用生成，结合文档的训练有助于模型使用参考资料。与此同时，检索器找到错误文档时，加入检索反而可能降低准确率。论文还展示了依据变更后的文档调整输出的案例。这里有训练、检索质量和文档变化三个变量，不能把结果缩成“接上 RAG 就更准”。<a target="_blank" rel="noopener" href="https://arxiv.org/pdf/2305.15334v1#page=6">实验依据：原论文第 4 节、Table 1–2 与 Figure 6</a>。</p>
+<p>所以，Gorilla 的贡献可以具体落在 APIBench 数据、面向 API 调用的指令微调、利用参考文档的训练方式，以及相应的结构化评测上。它把“需求怎样对上一个真实 API”变成可训练、可比较的问题。原论文主要考察单次 API 调用生成，连续查资料、执行失败后恢复、权限检查等运行机制仍要由 Agent 系统另行实现。</p>
+<h2 id="BFCL-Benchmark：怎样评价工具调用能力"><a href="#BFCL-Benchmark：怎样评价工具调用能力" class="headerlink" title="BFCL Benchmark：怎样评价工具调用能力"></a>BFCL Benchmark：怎样评价工具调用能力</h2><p>Gorilla 让我们看到调用生成可以怎样训练，接下来还要回答：换一个模型后，怎样判断它的工具能力够不够？只给几个演示案例，很容易漏掉“工具名称相似”“一次需要查两处”“缺参数就该停下”这样的情况。</p>
+<p><strong>BFCL 是工具调用能力的 benchmark（评测基准）</strong>，全称是 Berkeley Function Calling Leaderboard。它提供测试题、工具描述、参考答案和判分程序，用同一套条件比较模型。论文的主要贡献是评测任务与判分方法的设计，以及由实验发现的能力缺口。</p>
+<p>学习它，可以知道系统应该接受哪些测试、怎样才算完成任务。它没有提出一套供应用照着实现的 Agent 架构；下文的 AST 匹配、执行测试、状态与响应检查，都属于评测端的判分机制，不是要求每个 Agent 加入的运行组件。这里讨论 <a target="_blank" rel="noopener" href="https://proceedings.mlr.press/v267/patil25a.html">ICML 2025 论文中的 BFCL</a>，不把持续更新的在线榜单与论文中的固定实验混在一起。</p>
+<h3 id="一道题给模型什么"><a href="#一道题给模型什么" class="headerlink" title="一道题给模型什么"></a>一道题给模型什么</h3><p>单轮题通常给出用户需求和一组可用函数文档，文档说明名称、用途和参数。模型需要输出调用，或者判断当前不应调用。评测端另持有标准答案，模型看不到这部分。</p>
+<p>这些函数和需求来自整理过的代码仓库、API 资料及用户贡献。作者提取函数签名和参数说明，整理题目，并用检查和人工审核确认题目与工具描述相符。多轮题还需要初始环境状态与参考执行轨迹，因此作者构建了可检查内部状态的 API 环境，并验证每轮任务与调用路径的对应关系。<a target="_blank" rel="noopener" href="https://raw.githubusercontent.com/mlresearch/v267/main/assets/patil25a/patil25a.pdf#page=3">数据构造依据：原论文第 3 节</a>。</p>
+<h3 id="多工具与并行调用，究竟有什么区别"><a href="#多工具与并行调用，究竟有什么区别" class="headerlink" title="多工具与并行调用，究竟有什么区别"></a>多工具与并行调用，究竟有什么区别</h3><p>这里有两个独立维度：<strong>给模型多少个候选工具，以及任务需要多少次调用</strong>。下面用假设的论文调研工具举例，说明论文附录 C 中的分类；这些例子不是原始测试题。</p>
+<table>
+<thead>
+<tr>
+<th>类别</th>
+<th>提供的工具与用户要求</th>
+<th>预期行为</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Simple</td>
+<td>只有 <code>read_pdf</code>，要求读取论文 A</td>
+<td>调用一次 <code>read_pdf(A)</code></td>
+</tr>
+<tr>
+<td>Multiple</td>
+<td>有 <code>read_pdf</code>、<code>search_papers</code>、<code>save_report</code>，要求读取已给出地址的论文 A</td>
+<td>选中 <code>read_pdf</code>，调用一次</td>
+</tr>
+<tr>
+<td>Parallel</td>
+<td>只有 <code>read_pdf</code>，要求读取已给出地址的论文 A、B</td>
+<td>生成 <code>read_pdf(A)</code> 和 <code>read_pdf(B)</code> 两个独立调用</td>
+</tr>
+<tr>
+<td>Parallel Multiple</td>
+<td>有多个工具，要求读取论文 A，同时搜索一个独立主题</td>
+<td>生成 <code>read_pdf(A)</code> 与 <code>search_papers(query)</code></td>
+</tr>
+</tbody></table>
+<p>Multiple 测的是从候选中选择工具，有多个候选不意味着都要调用。Parallel 测的是能否完整给出多次独立调用；同一个函数使用不同参数，也属于多次调用。Parallel Multiple 同时包含工具选择和多次调用。<a target="_blank" rel="noopener" href="https://raw.githubusercontent.com/mlresearch/v267/main/assets/patil25a/patil25a.pdf#page=15">分类依据：原论文附录 C.2</a>。</p>
+<p>如果要求“先搜索论文，再读取搜索到的第一篇”，第二步的参数要等第一步返回才能知道，属于有依赖的串行过程。并行题中两个独立调用的列出顺序通常不影响正确性；把有依赖的步骤提前一起生成，则可能使用尚不存在的结果。评测中的并行调用能力，也不等于宿主已经实现了线程调度或真实的并发加速。</p>
+<h3 id="为什么“不调用”也要专门出题"><a href="#为什么“不调用”也要专门出题" class="headerlink" title="为什么“不调用”也要专门出题"></a>为什么“不调用”也要专门出题</h3><p>假设现有工具只有论文搜索，用户要求“给同事发送邮件”。调用搜索工具无法完成目标，编一个 <code>send_email</code> 也不成立。<strong>Irrelevance</strong> 类题预期没有函数调用，用来检查模型是否识别能力不匹配。与之对应，Relevance 类题需要调用，避免模型靠一律拒绝拿到看似稳妥的结果。</p>
+<p>另一个情况是工具存在，但必填参数缺失。比如 <code>save_report(folder_id, content)</code> 需要文件夹 ID，用户只说“帮我保存”，上下文和系统信息也无法补齐目标位置。正确动作是先询问，收到必要信息再调用。BFCL 的多轮 Missing Parameters 类专门检查这个过程；缺工具与缺参数需要分别判断，修复办法也不同。</p>
+<h3 id="多轮交互增加了哪些难点"><a href="#多轮交互增加了哪些难点" class="headerlink" title="多轮交互增加了哪些难点"></a>多轮交互增加了哪些难点</h3><p>单轮题判断这次需求对应什么调用，多轮题还要维护前面已经发生的事。这里的“一轮”由新的用户消息开始，一轮内部可以包含多次模型与工具之间的交互；不能把多轮直接理解为调用了多个函数。</p>
+<p>假设用户先说“在项目 A 下新建调研文件夹”，工具返回 <code>folder_id=&quot;f17&quot;</code>；下一轮用户说“把刚才那份报告放进去”。模型需要沿用 <code>f17</code>，而不是另猜一个位置。随后用户要求改名，就必须依据已经创建的文件继续操作。</p>
+<p>论文把多轮任务分成四类。<strong>Base</strong> 提供完成任务所需的信息，检查正常的状态延续。<strong>Missing Parameters</strong> 在某轮缺少必要参数，要求先自然语言追问，后续用户消息补齐参数。<strong>Missing Functions</strong> 在某轮缺少能完成任务的工具，检查模型能否识别能力缺口并回应、澄清。<strong>Long Context</strong> 增加用户消息或工具返回的长度，考察关键信息在长上下文中是否仍能被正确使用。它们分别暴露记错状态、猜参数、虚构能力和丢失上下文的问题。<a target="_blank" rel="noopener" href="https://raw.githubusercontent.com/mlresearch/v267/main/assets/patil25a/patil25a.pdf#page=4">多轮定义依据：原论文第 3.3 节与附录 D</a>。</p>
+<h3 id="评测端怎样用-AST-匹配批改调用"><a href="#评测端怎样用-AST-匹配批改调用" class="headerlink" title="评测端怎样用 AST 匹配批改调用"></a>评测端怎样用 AST 匹配批改调用</h3><p>AST 是抽象语法树。评测程序把模型生成的代码解析成函数名、参数名和参数值等结构，再与预先标注的参考答案比较；这一判分方式可以不实际执行工具。</p>
+<p>假设预期调用是：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">save_report(folder_id=<span class="string">&quot;A&quot;</span>, content=<span class="string">&quot;报告正文&quot;</span>)</span><br></pre></td></tr></table></figure>
+
+<p>模型输出 <code>save_report(content=&quot;报告正文&quot;, folder_id=&quot;A&quot;)</code>，关键字参数顺序变化通常不影响意义。AST 判分会解析函数名和参数结构，再检查函数是否匹配、各参数是否属于预先标注的可接受答案集合，因此不必逐字符照抄参考答案。若输出的 <code>folder_id</code> 为 <code>&quot;B&quot;</code>，即使语法完全合法也应失败。</p>
+<p>这种方法的好处是不用为每个函数都准备运行服务，就能批量检查大量调用。代价是它只能覆盖标注和匹配规则定义的正确性：标注遗漏的等价答案可能不被接受，运行时权限或服务故障也不会因为 AST 通过就消失。论文比较了 AST 与执行判分得到的分数和排序，观察到较强相关性，以此支持 AST 作为可扩展的离线指标。<a target="_blank" rel="noopener" href="https://raw.githubusercontent.com/mlresearch/v267/main/assets/patil25a/patil25a.pdf#page=5">AST 方法与验证依据：原论文第 4.1、4.3 节</a>。</p>
+<h3 id="能执行的题，怎样检查执行结果"><a href="#能执行的题，怎样检查执行结果" class="headerlink" title="能执行的题，怎样检查执行结果"></a>能执行的题，怎样检查执行结果</h3><p>执行判分会实际运行模型生成的函数调用，再对比预期结果。论文根据输出性质采用不同规则：确定性结果直接比较；对会随时间变化的结果，同时运行参考调用和模型调用后比较；对某些嵌套列表或字典则检查列表长度、字典键等结构。最后一种检查较弱，不能把结构相符理解为每个值都已证明正确。<a target="_blank" rel="noopener" href="https://raw.githubusercontent.com/mlresearch/v267/main/assets/patil25a/patil25a.pdf#page=5">执行判分依据：原论文第 4.2 节</a>。</p>
+<p>不同测试集使用不同检查方式：论文的单轮集合包含 AST 和执行评测，用户贡献的 Live 集合主要使用 AST，多轮集合则结合状态与响应检查。它们没有统一成“每题都把所有检查跑一遍”的流程。</p>
+<h3 id="多轮为什么同时检查状态与响应"><a href="#多轮为什么同时检查状态与响应" class="headerlink" title="多轮为什么同时检查状态与响应"></a>多轮为什么同时检查状态与响应</h3><p>回到保存报告的例子。<strong>状态检查（state-based evaluation）</strong> 在每轮工具调用结束后，核对系统状态是否与参考状态一致：文件是否出现、所属文件夹是否正确、名称是否已更新。不同调用路径可能到达同一个正确状态，所以它不要求逐字复制参考调用序列。</p>
+<p>但只读操作会留下漏洞。用户要求查询一条记录，模型没有查询、凭空答了一个数字，数据库同样保持不变。只看状态，无法辨别它是否真的做过查询。</p>
+<p>因此还有 <strong>响应检查（response-based evaluation）</strong>，检查完成该轮任务所需的调用及执行结果路径。论文举例先通过城市取得邮编，再根据邮编查天气；检查要能确认必要的只读函数确实被调用。这里的“响应”不能简单理解为让另一个模型评价最终文字好不好听，它与必要的工具执行路径有关。</p>
+<p>BFCL 多轮题要求<strong>每一轮的状态与响应检查都通过，整条题目才算正确</strong>。假设第一轮把报告写错文件夹，第二轮又挪回来，只核对整段对话最后的状态会漏掉前一轮错误；逐轮检查能保留这次失败。<a target="_blank" rel="noopener" href="https://raw.githubusercontent.com/mlresearch/v267/main/assets/patil25a/patil25a.pdf#page=5">状态与响应判分依据：原论文第 4.4 节</a>。</p>
+<h3 id="这些分数能说明什么"><a href="#这些分数能说明什么" class="headerlink" title="这些分数能说明什么"></a>这些分数能说明什么</h3><p>同一类别的准确率可以理解成“通过该类别检查的题目数 &#x2F; 该类别题目总数”。对于上述多轮题，分母中的一题是一整段对话；它与把每个单独调用当一题的准确率含义不同。比较模型时要同时看类别、判分方式和测试版本，不能只摘一个总分。</p>
+<p>论文还加入 Agentic 任务：网页搜索需要检索并读取页面；记忆任务在对话后保存记忆，再在清空聊天历史、保留记忆的条件下提问，检查检索和更新；SQL 任务提供结构化操作接口，再将调用转换为查询。这让评测进一步涉及工具结果利用与跨步骤的信息保持。<a target="_blank" rel="noopener" href="https://raw.githubusercontent.com/mlresearch/v267/main/assets/patil25a/patil25a.pdf#page=4">Agentic 任务依据：原论文第 3.4 节</a>。</p>
+<p>作者观察到，单轮调用表现较好的模型，在多轮与 Agentic 任务上仍有明显改进空间，尤其是记忆任务。BFCL 的贡献也由此更清楚：它把工具能力拆成有区分度的任务，并提供可重复的判分机制，让“能写一次调用”与“能把一段交互做对”分别接受检验。<a target="_blank" rel="noopener" href="https://raw.githubusercontent.com/mlresearch/v267/main/assets/patil25a/patil25a.pdf#page=6">实验结果依据：原论文第 5 节</a>。</p>
+<p>迁移到我们的调研助手时，就应该保留分项失败记录：是选错了工具、参数不对、该询问时直接调用，还是前面的创建成功了，后面却忘了返回的 ID。每种错误对应不同修复方向，聚合成一个总分之后仍应能追溯。</p>
+<h2 id="方法与-Benchmark-分别能帮助我们做什么"><a href="#方法与-Benchmark-分别能帮助我们做什么" class="headerlink" title="方法与 Benchmark 分别能帮助我们做什么"></a>方法与 Benchmark 分别能帮助我们做什么</h2><p>Toolformer 主要研究工具使用训练信号，Gorilla 研究 API 文档与调用生成，BFCL 研究怎样系统地测量调用能力。我们可以按这个顺序学习，但它们处理的是不同问题，不能拿一个训练方案与一个评测集直接比较“谁更强”。</p>
+<table>
+<thead>
+<tr>
+<th>工作及类型</th>
+<th>核心对象</th>
+<th>可以借鉴的内容</th>
+<th>仍需另行解决</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Toolformer：训练方法</td>
+<td>带工具调用的训练数据</td>
+<td>采样、执行、按损失筛选，再微调</td>
+<td>业务正确性、权限、真实任务验收</td>
+</tr>
+<tr>
+<td>Gorilla：模型与训练方法，配套 APIBench 数据</td>
+<td>API 文档与调用生成</td>
+<td>检索文档、结合文档训练和生成</td>
+<td>候选漏召回、版本一致性、运行控制</td>
+</tr>
+<tr>
+<td>BFCL：benchmark</td>
+<td>测试题、参考答案与判分程序</td>
+<td>结构检查、执行检查、多轮状态与响应检查</td>
+<td>本项目的约束、代价和故障场景</td>
+</tr>
+</tbody></table>
+<p>如果已有模型能较好地生成调用，我们可以先做清晰的 schema、工具检索和执行检查。只有发现稳定的能力缺口，并且有足够训练数据时，再考虑微调。这个判断需要错误分布：是接口没找到、参数没理解，还是工具本身经常失败？</p>
+<h2 id="面试追问：从调用意图到真实执行"><a href="#面试追问：从调用意图到真实执行" class="headerlink" title="面试追问：从调用意图到真实执行"></a>面试追问：从调用意图到真实执行</h2><p><strong>“Function Calling 到底是谁在调用函数？”</strong> 模型输出结构化调用意图，宿主根据注册的工具进行解析、校验和执行，再把真实结果交回模型。把文本直接当可执行代码，会把接口选择、权限和执行混在一起。在我们的系统中，工具名必须能映射到已注册实现，参数通过 schema 之后还要检查业务约束。</p>
+<p><strong>“MCP 和 Function Calling 有什么区别？”</strong> Function Calling 讨论模型如何表达调用意图；MCP 定义应用与工具或上下文服务之间的交互协议。一个宿主可以把 MCP 服务提供的工具描述交给模型，再通过协议发起真实调用。协议统一了连接和交互方式，具体怎样选择模型、管理上下文，仍由应用决定。参见 <a target="_blank" rel="noopener" href="https://modelcontextprotocol.io/docs/learn/architecture">MCP 官方架构说明</a>。</p>
+<p><strong>“工具 schema 怎样设计？”</strong> 以保存报告为例，应说清 <code>folder_id</code> 指哪一类文件夹，<code>content</code> 是正文还是完整文档，是否会覆盖已有文件，以及缺参数时怎么处理。用枚举或明确类型限制参数范围；工具描述解释用途和关键前置条件。若两个工具仅名称不同、描述几乎一样，模型就缺少区分依据。</p>
+<p><strong>“什么时候可以并行调用？”</strong> 两篇公开论文的独立读取可以并行；创建文件夹和往它里面写报告有依赖，需要先拿到创建结果。两个操作同时写同一份报告，也要处理冲突。模型一次输出多个调用只代表提出了多个动作，调度器还需检查依赖、资源冲突和并发限制。</p>
+<p><strong>“工具超时了，是不是直接重试？”</strong> 只读查询通常容易重试，写操作超时则可能已经生效。假设服务创建了文档，但响应在网络中丢失，重试前应按幂等键或任务标识查询真实状态。错误结果最好能区分参数无效、无权限、暂时失败和状态未知，再决定改参数、重试还是核对结果。</p>
+<p><strong>“参数类型正确，为什么还需要权限检查？”</strong> <code>folder_id</code> 是字符串，不能说明当前用户有权访问那个文件夹。同样，网页内容中出现“上传全部日志”不构成当前任务授权。执行端需要根据用户、资源、动作和任务范围检查权限，并把失败原因作为受控结果返回。</p>
+<p><strong>“没有合适工具时怎么办？”</strong> 先判断是否可以直接回答，是否缺少必要参数，或者现有能力确实无法完成。缺少项目 ID 时，应澄清或调用获准的查询工具；不能猜一个 ID 继续写入。评测也要包含正确的“不调用”，否则系统会被鼓励在每个问题上都使用工具。</p>
+<h2 id="给调研助手做一组小而完整的验收"><a href="#给调研助手做一组小而完整的验收" class="headerlink" title="给调研助手做一组小而完整的验收"></a>给调研助手做一组小而完整的验收</h2><p>我们可以从同一个“保存比较报告”的任务构造几种变化：正常路径、遗漏文件夹信息、给出无权限文件夹、两个名称相近的工具、过期 API 文档、写入成功后响应丢失，以及用户只想看预览的情况。</p>
+<p>每次运行记录实际工具、参数、返回结果和最终文件状态。正常路径检查内容和位置，缺信息的路径检查是否补齐前置条件，响应丢失的路径检查是否产生重复文件。对用户只要求预览的情况，则检查系统有没有擅自发布。测试中应使用隔离的文件或模拟服务，避免为了验证错误路径而影响实际数据。</p>
+<p>这一批论文分别帮助我们理解训练、调用生成和评价，测试用例则把它们落到同一项工作上。接着可以看<a href="/blog/2026/09/15/agent-frameworks-langgraph/">框架篇</a>，把前面讨论的机制放进一个实际的运行系统：怎样传递状态、调度工具，以及中断后怎样继续。</p>
+<p><a href="/blog/2026/09/14/agent-planning-react-reflexion-lats/">上一篇：从 ReAct 到反思与搜索</a> · <a href="/blog/columns/agent/">Agent 学习笔记专栏</a></p>
+</div><aside class="toc"><div class="side-label">ON THIS PAGE</div><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#Toolformer%EF%BC%9A%E4%BB%8E%E5%93%AA%E9%87%8C%E8%8E%B7%E5%BE%97%E2%80%9C%E4%BB%80%E4%B9%88%E6%97%B6%E5%80%99%E7%94%A8%E5%B7%A5%E5%85%B7%E2%80%9D%E7%9A%84%E8%AE%AD%E7%BB%83%E6%95%B0%E6%8D%AE"><span class="toc-text">Toolformer：从哪里获得“什么时候用工具”的训练数据</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Gorilla%EF%BC%9A%E6%80%8E%E6%A0%B7%E6%8A%8A%E4%B8%80%E4%B8%AA%E9%9C%80%E6%B1%82%E5%8F%98%E6%88%90%E5%85%B7%E4%BD%93%E7%9A%84-API-%E8%B0%83%E7%94%A8"><span class="toc-text">Gorilla：怎样把一个需求变成具体的 API 调用</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AE%AD%E7%BB%83%E6%A0%B7%E6%9C%AC%E4%BB%8E%E5%93%AA%E9%87%8C%E6%9D%A5"><span class="toc-text">训练样本从哪里来</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%BE%AE%E8%B0%83%E7%A9%B6%E7%AB%9F%E6%95%99%E4%BA%86%E4%BB%80%E4%B9%88%EF%BC%8C%E6%A3%80%E7%B4%A2%E5%8F%88%E5%8F%91%E7%94%9F%E5%9C%A8%E5%93%AA%E9%87%8C"><span class="toc-text">微调究竟教了什么，检索又发生在哪里</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BD%9C%E8%80%85%E6%80%8E%E6%A0%B7%E5%88%A4%E6%96%AD%E5%AE%83%E7%9C%9F%E7%9A%84%E6%94%B9%E8%BF%9B%E4%BA%86"><span class="toc-text">作者怎样判断它真的改进了</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#BFCL-Benchmark%EF%BC%9A%E6%80%8E%E6%A0%B7%E8%AF%84%E4%BB%B7%E5%B7%A5%E5%85%B7%E8%B0%83%E7%94%A8%E8%83%BD%E5%8A%9B"><span class="toc-text">BFCL Benchmark：怎样评价工具调用能力</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%80%E9%81%93%E9%A2%98%E7%BB%99%E6%A8%A1%E5%9E%8B%E4%BB%80%E4%B9%88"><span class="toc-text">一道题给模型什么</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%A4%9A%E5%B7%A5%E5%85%B7%E4%B8%8E%E5%B9%B6%E8%A1%8C%E8%B0%83%E7%94%A8%EF%BC%8C%E7%A9%B6%E7%AB%9F%E6%9C%89%E4%BB%80%E4%B9%88%E5%8C%BA%E5%88%AB"><span class="toc-text">多工具与并行调用，究竟有什么区别</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%BA%E4%BB%80%E4%B9%88%E2%80%9C%E4%B8%8D%E8%B0%83%E7%94%A8%E2%80%9D%E4%B9%9F%E8%A6%81%E4%B8%93%E9%97%A8%E5%87%BA%E9%A2%98"><span class="toc-text">为什么“不调用”也要专门出题</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%A4%9A%E8%BD%AE%E4%BA%A4%E4%BA%92%E5%A2%9E%E5%8A%A0%E4%BA%86%E5%93%AA%E4%BA%9B%E9%9A%BE%E7%82%B9"><span class="toc-text">多轮交互增加了哪些难点</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AF%84%E6%B5%8B%E7%AB%AF%E6%80%8E%E6%A0%B7%E7%94%A8-AST-%E5%8C%B9%E9%85%8D%E6%89%B9%E6%94%B9%E8%B0%83%E7%94%A8"><span class="toc-text">评测端怎样用 AST 匹配批改调用</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%83%BD%E6%89%A7%E8%A1%8C%E7%9A%84%E9%A2%98%EF%BC%8C%E6%80%8E%E6%A0%B7%E6%A3%80%E6%9F%A5%E6%89%A7%E8%A1%8C%E7%BB%93%E6%9E%9C"><span class="toc-text">能执行的题，怎样检查执行结果</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%A4%9A%E8%BD%AE%E4%B8%BA%E4%BB%80%E4%B9%88%E5%90%8C%E6%97%B6%E6%A3%80%E6%9F%A5%E7%8A%B6%E6%80%81%E4%B8%8E%E5%93%8D%E5%BA%94"><span class="toc-text">多轮为什么同时检查状态与响应</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%BF%99%E4%BA%9B%E5%88%86%E6%95%B0%E8%83%BD%E8%AF%B4%E6%98%8E%E4%BB%80%E4%B9%88"><span class="toc-text">这些分数能说明什么</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%96%B9%E6%B3%95%E4%B8%8E-Benchmark-%E5%88%86%E5%88%AB%E8%83%BD%E5%B8%AE%E5%8A%A9%E6%88%91%E4%BB%AC%E5%81%9A%E4%BB%80%E4%B9%88"><span class="toc-text">方法与 Benchmark 分别能帮助我们做什么</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%9D%A2%E8%AF%95%E8%BF%BD%E9%97%AE%EF%BC%9A%E4%BB%8E%E8%B0%83%E7%94%A8%E6%84%8F%E5%9B%BE%E5%88%B0%E7%9C%9F%E5%AE%9E%E6%89%A7%E8%A1%8C"><span class="toc-text">面试追问：从调用意图到真实执行</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%BB%99%E8%B0%83%E7%A0%94%E5%8A%A9%E6%89%8B%E5%81%9A%E4%B8%80%E7%BB%84%E5%B0%8F%E8%80%8C%E5%AE%8C%E6%95%B4%E7%9A%84%E9%AA%8C%E6%94%B6"><span class="toc-text">给调研助手做一组小而完整的验收</span></a></li></ol></aside></div><nav class="post-navigation" aria-label="专栏阅读顺序"><a href="/blog/2026/09/14/agent-planning-react-reflexion-lats/"><span>← 上一篇</span><br>Agent学习笔记（三）从 ReAct 到反思与搜索</a><a href="/blog/columns/agent/">专栏目录<br>4 / 5</a><a href="/blog/2026/09/15/agent-frameworks-langgraph/"><span>下一篇 →</span><br>Agent学习笔记（五）从 LangGraph 理解 Agent 框架怎样设计</a></nav></article></main><footer><span>© 2026 OceanCT</span><span>保持好奇，把理解留下来。<span class="footer-dot">●</span></span><a href="#main">回到顶部 ↑</a></footer></div><script src="/blog/js/ocean.js" defer></script></body></html>
