@@ -105,6 +105,7 @@ theme: ocean
 ## Docs: https://hexo.io/docs/one-command-deployment
 deploy:
   type: 'git'
+  email: OceanCT17@gmail.com
   ignore_hidden: false
   repository: https://github.com/OceanCT/blog
   branch: gh-pages

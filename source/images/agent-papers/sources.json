@@ -1,0 +1,47 @@
+[
+  {
+    "paper": "memgpt",
+    "pdf_url": "https://arxiv.org/pdf/2310.08560v2",
+    "page": 3,
+    "figure": 3,
+    "source_pdf_sha256": "9f674bcff69c86f11c813dcfad613d8841f5f8ed17979e3c4df06a91df7762e0",
+    "operation": "Crop original paper figure; no redraw or content changes",
+    "crop_pixels": [
+      145,
+      114,
+      917,
+      417
+    ],
+    "render_long_edge": 1400
+  },
+  {
+    "paper": "reflexion",
+    "pdf_url": "https://arxiv.org/pdf/2303.11366v4",
+    "page": 4,
+    "figure": 2,
+    "source_pdf_sha256": "6059b6f89fea9959bd3dab553fbb97756a3dfb1b15e3cbab2fbf3ab6664333bd",
+    "operation": "Crop original paper figure; no redraw or content changes",
+    "crop_pixels": [
+      187,
+      145,
+      899,
+      489
+    ],
+    "render_long_edge": 1400
+  },
+  {
+    "paper": "toolformer",
+    "pdf_url": "https://arxiv.org/pdf/2302.04761v1",
+    "page": 2,
+    "figure": 2,
+    "source_pdf_sha256": "6d7483d94653008e40c2058a1c22441c92e3713dae278b6361e8efc447c99522",
+    "operation": "Crop original paper figure; no redraw or content changes",
+    "crop_pixels": [
+      111,
+      114,
+      881,
+      280
+    ],
+    "render_long_edge": 1400
+  }
+]
