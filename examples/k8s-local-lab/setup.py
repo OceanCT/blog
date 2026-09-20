@@ -48,8 +48,13 @@ download_tool('kubectl', f'https://dl.k8s.io/release/v1.37.0/bin/darwin/{arch}/k
               f'https://dl.k8s.io/release/v1.37.0/bin/darwin/{arch}/kubectl.sha256')
 status = run(['colima', 'status', '--profile', 'learning-lab'], capture=True, check=False)
 if status.returncode:
-    run(['colima', 'start', '--profile', 'learning-lab', '--runtime', 'docker', '--vm-type', 'vz',
-         '--cpu', '4', '--memory', '6', '--disk', '30', '--activate=false'])
+    start = ['colima', 'start', '--profile', 'learning-lab', '--runtime', 'docker', '--vm-type', 'vz',
+             '--cpu', '2', '--memory', '2', '--activate=false']
+    # Existing disks cannot safely be shrunk in place. Only set capacity on first creation.
+    colima_home = Path(ENV.get('COLIMA_HOME', str(Path.home()/'.colima')))
+    if not (colima_home/'learning-lab/colima.yaml').exists():
+        start += ['--disk', '10']
+    run(start)
 run(['docker', 'info', '--format', 'Colima Docker {{.ServerVersion}}; CPU={{.NCPU}}; Memory={{.MemTotal}}'])
 clusters = run(['kind', 'get', 'clusters'], capture=True).stdout.split()
 if 'resource-lab' not in clusters:

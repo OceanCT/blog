@@ -1,6 +1,8 @@
 # 在 Mac 上验证 Kubernetes 与 Ray
 
-这个实验用 Colima 的 Linux 虚拟机运行容器，用 kind 创建单节点 Kubernetes。全程命令行，不安装或启动 Docker Desktop。需要 macOS 13+、Python 3、Homebrew，建议至少 8 GB 可用内存及 15 GB 可用磁盘。初始化给虚拟机分配 4 CPU、6 GiB 内存、30 GiB 虚拟磁盘；实际资源不足时修改 setup.py 中的参数。
+这个实验用 Colima 的 Linux 虚拟机运行容器，用 kind 创建单节点 Kubernetes。全程命令行，不安装或启动 Docker Desktop。需要 macOS 13+、Python 3、Homebrew。初始化默认给虚拟机分配 2 CPU、2 GiB 内存，新建数据盘容量设为 10 GiB。磁盘容量不是实际占用量，也不是实验的最低空间要求；已有数据盘保留，不自动缩小或删除。只运行 K8S 部分不会构建 Ray 镜像，四个资源实验顺序执行。
+
+2026-09-20 测得现有环境的系统盘已用约 1.2 GB、容器数据盘约 3.4 GB（包含可选 Ray 镜像）；Mac 上这两个虚拟磁盘所在目录实际占用约 4.9 GB，另有约 317 MB 的 Colima 下载缓存。这些是已有环境的测量，不是全新安装峰值或最低要求。
 
 ## 初始化
 
