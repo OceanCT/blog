@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Agent学习笔记（七）记忆管理：会话、压缩与跨任务记忆 · OceanCT / Notes</title><meta name="description" content="区分会话保存、上下文压缩与跨任务记忆，比较 LangGraph、Letta、Mem0 及 OpenAI、Anthropic 的相关接口。"><meta name="theme-color" content="#f7f6f2"><link rel="stylesheet" href="/blog/css/ocean.css"><meta name="generator" content="Hexo 5.4.2"></head>
+<body><a class="skip" href="#main">跳到内容</a><div class="site"><header class="header"><a class="brand" href="/blog/" aria-label="OceanCT 首页"><span class="brand-mark">o.</span> OceanCT<span class="brand-slash"> / notes</span></a><nav aria-label="主导航"><a class="" href="/blog/">首页</a><a class="" href="/blog/archives/">归档</a><a class="" href="/blog/columns/">专栏</a><a href="https://github.com/OceanCT" target="_blank" rel="noopener noreferrer">GitHub ↗</a></nav></header><main id="main">
+<div class="post-back"><a href="/blog/columns/agent/">← Agent 专栏</a></div><article class="post"><header class="post-header"><div class="eyebrow"><time datetime="2026-09-23">2026.09.23</time> / LEARNING NOTES</div><h1>Agent学习笔记（七）记忆管理：会话、压缩与跨任务记忆</h1><p class="post-description">区分会话保存、上下文压缩与跨任务记忆，比较 LangGraph、Letta、Mem0 及 OpenAI、Anthropic 的相关接口。</p><div class="post-tags"><a href="/blog/tags/Agent/">Agent</a><a href="/blog/tags/%E6%A1%86%E6%9E%B6/">框架</a><a href="/blog/tags/Memory/">Memory</a></div></header><div class="post-grid"><div class="prose"><p>调研进行到第二天，助手需要接着读昨天的资料；对话变长以后，又不能把所有搜索结果原样放进下一次模型请求。与此同时，用户已经确认过“报告要注明实验条件”，我们希望下一项调研也能沿用这个要求。这些需求都常被称为 Memory，但实现时要分别处理。</p>
+<p>第二篇已经从 MemGPT 和 Letta 解释了上下文与外部记忆的关系。这里把问题落到工程实现：保存什么、什么时候压缩、怎样重新读取，以及不同组件替我们完成哪一步。</p>
+<h2 id="先区分三种要保存的东西"><a href="#先区分三种要保存的东西" class="headerlink" title="先区分三种要保存的东西"></a>先区分三种要保存的东西</h2><table>
+<thead>
+<tr>
+<th>对象</th>
+<th>调研助手中的例子</th>
+<th>后续怎样使用</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>执行与会话状态</td>
+<td>当前草稿、待执行调用、已有消息</td>
+<td>恢复同一项任务，继续下一步</td>
+</tr>
+<tr>
+<td>本次模型的上下文</td>
+<td>当前问题、近期调用结果、历史摘要</td>
+<td>直接进入下一次模型请求</td>
+</tr>
+<tr>
+<td>跨任务记忆</td>
+<td>已确认的报告偏好、项目约定</td>
+<td>新任务开始时按需读取或检索</td>
+</tr>
+</tbody></table>
+<p>把消息写进数据库，只说明以后还能读到它。程序仍要选择哪些内容交给模型。如果把数据库里的全部历史重新发送，持久化问题解决了，上下文过长的问题依然存在。</p>
+<p>同样，把十万字历史压成几千字摘要，只处理了当前上下文的体积。哪些偏好值得跨任务保存、旧要求如何被新要求替代，还需要另外定义。</p>
+<h2 id="会话保存：LangGraph-Checkpointer-与-SDK-Session"><a href="#会话保存：LangGraph-Checkpointer-与-SDK-Session" class="headerlink" title="会话保存：LangGraph Checkpointer 与 SDK Session"></a>会话保存：LangGraph Checkpointer 与 SDK Session</h2><p>LangGraph 的 checkpointer 保存一个 thread 的图状态与执行进度，store 则用于跨 thread 的应用数据。我们可以把“这次读到了哪篇论文”放在执行状态，把“该用户要求标注实验条件”放在按用户组织的 store。写入 store 以后，模型节点还要读取需要的记录，构造本次输入。<a target="_blank" rel="noopener" href="https://docs.langchain.com/oss/python/langgraph/persistence">官方持久化说明</a>。</p>
+<p>OpenAI Agents SDK 的 session 可以加载并保存会话历史，让连续调用沿用同一份记录；Claude Agent SDK 也提供会话续接能力。它们能减少维护历史记录的工作，但会话续接本身并没有定义哪些事实应成为另一项任务的长期记忆。<a target="_blank" rel="noopener" href="https://developers.openai.com/api/docs/guides/agents/results">OpenAI 运行结果与状态</a>、<a target="_blank" rel="noopener" href="https://code.claude.com/docs/en/agent-sdk/sessions">Claude Agent SDK 会话</a>。</p>
+<p>选择这一层实现时，先确定想恢复的是消息历史，还是包含分支和待执行任务的运行状态。第五篇的检查点恢复解决后者，不能只用“支持记忆”概括这些差别。</p>
+<h2 id="上下文压缩：摘要怎样进入下一轮请求"><a href="#上下文压缩：摘要怎样进入下一轮请求" class="headerlink" title="上下文压缩：摘要怎样进入下一轮请求"></a>上下文压缩：摘要怎样进入下一轮请求</h2><p>一种容易自行实现的做法，是保留近期消息，把较早的历史交给摘要模型，再用摘要替换这段历史：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">压缩前：任务要求 + 早期搜索与讨论 + 最近几轮工具调用</span><br><span class="line">                       ↓ 摘要模型</span><br><span class="line">压缩后：任务要求 + 历史摘要       + 最近几轮工具调用</span><br><span class="line">                       ↓</span><br><span class="line">                  下一次模型请求</span><br></pre></td></tr></table></figure>
+
+<p>切分时要避免把工具调用和对应结果拆散。摘要还需要保留继续工作所需的信息，例如已经排除的方案、未解决的问题和证据出处。如果只压成“已完成调研，准备写报告”，字数虽然少了，模型却可能重新做一遍搜索。</p>
+<h3 id="LangChain-SummarizationMiddleware"><a href="#LangChain-SummarizationMiddleware" class="headerlink" title="LangChain SummarizationMiddleware"></a>LangChain SummarizationMiddleware</h3><p>LangChain 的摘要中间件在模型调用前检查触发条件，划分待总结历史与保留的近期消息，调用配置的摘要模型，再更新消息列表。触发阈值、保留范围和摘要提示词都可以配置。<a target="_blank" rel="noopener" href="https://docs.langchain.com/oss/python/langchain/short-term-memory">短期记忆与摘要示例</a>。</p>
+<p>读实现时，还要注意摘要模型实际看到了多少旧消息。我们查看的<a target="_blank" rel="noopener" href="https://github.com/langchain-ai/langchain/blob/3971e49d24e1b0eef9f2446011583d5510fbbf44/libs/langchain_v1/langchain/agents/middleware/summarization.py">固定版本源码</a>中，<code>trim_tokens_to_summarize</code> 默认限制送入摘要模型的历史长度。因此，“待压缩历史”与“摘要模型实际读到的历史”可能并不相同；早期信息可能在生成摘要之前已经被裁掉。评估时应同时记录输入裁剪与摘要遗漏。</p>
+<p>这种实现便于检查提示词、替换摘要模型和调整保留规则。它的效果依赖具体消息与任务，不能仅凭框架提供了一个 summarize 接口判断记忆质量。</p>
+<h3 id="OpenAI-与-Anthropic-的-Compaction"><a href="#OpenAI-与-Anthropic-的-Compaction" class="headerlink" title="OpenAI 与 Anthropic 的 Compaction"></a>OpenAI 与 Anthropic 的 Compaction</h3><p>OpenAI Responses 提供 compaction。返回的压缩上下文可以包含加密的 compaction 项，也可能保留其他历史项；应用应按接口要求把返回窗口用于后续请求。这个压缩项不是供人阅读的普通摘要，不能用“逐句检查摘要”同样的方式解释它保留了什么。<a target="_blank" rel="noopener" href="https://developers.openai.com/api/docs/guides/compaction">官方 Compaction 说明</a>。</p>
+<p>Anthropic 也提供 compaction，支持按需压缩或在达到阈值时压缩，并允许相应模式下保留近期对话、调整摘要提示。具体模式的兼容条件需要按所用模型和接口核对。<a target="_blank" rel="noopener" href="https://platform.claude.com/docs/en/build-with-claude/compaction">官方 Compaction 说明</a>。</p>
+<p>这类服务接口减少了应用自己组织压缩请求的工作。与开源摘要中间件相比，比较重点是能控制哪些输入和保留规则、能观察什么输出，以及压缩后能否继续完成任务。</p>
+<h2 id="跨任务记忆：谁决定写入和读取"><a href="#跨任务记忆：谁决定写入和读取" class="headerlink" title="跨任务记忆：谁决定写入和读取"></a>跨任务记忆：谁决定写入和读取</h2><h3 id="LangGraph-Store：由应用组织读写策略"><a href="#LangGraph-Store：由应用组织读写策略" class="headerlink" title="LangGraph Store：由应用组织读写策略"></a>LangGraph Store：由应用组织读写策略</h3><p>Store 提供存储与查询的位置。应用可以在任务开始时读取用户偏好，在结束时提取经过确认的结论，再写入对应记录。何时查询、怎样避免误记、什么时候替换旧记录，都由程序或我们安排的模型步骤决定。</p>
+<p>如果已有数据库和明确的更新规则，这种方式容易融入现有服务。它也意味着记忆策略需要自己维护，存储接口不会自动判断一条结论是否值得长期保留。</p>
+<h3 id="Letta：将记忆管理纳入有状态-Agent"><a href="#Letta：将记忆管理纳入有状态-Agent" class="headerlink" title="Letta：将记忆管理纳入有状态 Agent"></a>Letta：将记忆管理纳入有状态 Agent</h3><p>Letta 的 memory blocks 将一部分持久信息放进 Agent 的上下文，块可以通过 API 或允许的工具更新。它适合解释“哪些信息持续可见、谁可以修改这些信息”这一类设计。更多外部内容则可以通过相应检索机制按需取回。<a target="_blank" rel="noopener" href="https://docs.letta.com/v1-sdk/memory/memory-blocks">Memory blocks 文档</a>。</p>
+<p>与只提供存储接口相比，Letta 将 Agent 状态和记忆操作组织得更完整。代价是应用需要适应它的对象和生命周期。块的结构、共享与更新过程已在<a href="/blog/2026/09/14/agent-memory-memgpt-letta/">第二篇</a>展开；这里关注的是是否需要采用这套运行方式。<a target="_blank" rel="noopener" href="https://github.com/letta-ai/letta">Letta 开源仓库</a>。</p>
+<h3 id="Mem0：把记忆处理接到已有-Agent-外围"><a href="#Mem0：把记忆处理接到已有-Agent-外围" class="headerlink" title="Mem0：把记忆处理接到已有 Agent 外围"></a>Mem0：把记忆处理接到已有 Agent 外围</h3><p>Mem0 提供独立的记忆层。应用可以提交交互内容，让它提取事实、决定或偏好并存储，后续按问题搜索相关记忆，再把结果加入模型输入。它有自运行的开源实现，也提供托管服务。<a target="_blank" rel="noopener" href="https://docs.mem0.ai/core-concepts/memory-operations/add">记忆写入机制</a>、<a target="_blank" rel="noopener" href="https://github.com/mem0ai/mem0">开源仓库</a>。</p>
+<p>这种接法不要求替换整个 Agent 循环，适合已有运行系统、希望增加记忆处理的情况。仍要检查提取是否准确、旧事实怎样更新，以及删除是否覆盖所有副本。</p>
+<h3 id="Anthropic-Memory-Tool：模型通过工具维护文件式记忆"><a href="#Anthropic-Memory-Tool：模型通过工具维护文件式记忆" class="headerlink" title="Anthropic Memory Tool：模型通过工具维护文件式记忆"></a>Anthropic Memory Tool：模型通过工具维护文件式记忆</h3><p>Anthropic 的 Memory Tool 定义了文件式记忆操作。Claude 提出读取或修改请求，应用执行操作并返回结果；<code>/memories</code> 由应用映射到实际文件或数据库。数据保存在应用控制的存储中。<a target="_blank" rel="noopener" href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool">官方 Memory Tool 说明</a>。</p>
+<p>它与应用主动调用 Mem0 的常见接法，在读写发起者上不同：前者让模型通过工具提出记忆操作，后者可以由应用在固定时机提交内容、调用检索。两者都需要考虑当前用户能读写哪些记忆，以及新旧内容如何保持一致。</p>
+<h2 id="怎样判断记忆真的有帮助"><a href="#怎样判断记忆真的有帮助" class="headerlink" title="怎样判断记忆真的有帮助"></a>怎样判断记忆真的有帮助</h2><table>
+<thead>
+<tr>
+<th>当前主要问题</th>
+<th>可以比较的实现</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>同一任务中断后继续</td>
+<td>LangGraph checkpointer、SDK session 与对应运行状态</td>
+</tr>
+<tr>
+<td>历史太长，下一轮放不下</td>
+<td>自写摘要、LangChain 中间件、OpenAI&#x2F;Anthropic compaction</td>
+</tr>
+<tr>
+<td>需要自己规定跨任务读写规则</td>
+<td>数据库或 LangGraph store</td>
+</tr>
+<tr>
+<td>希望采用包含记忆操作的 Agent 运行方式</td>
+<td>Letta</td>
+</tr>
+<tr>
+<td>希望给已有 Agent 接上记忆层</td>
+<td>Mem0，或自定义记忆工具</td>
+</tr>
+<tr>
+<td>希望 Claude 通过文件式接口管理记忆</td>
+<td>Anthropic Memory Tool 与应用存储</td>
+</tr>
+</tbody></table>
+<p>对日志压缩调研，可以用同一段历史比较不同策略：早期给出“只接受无损方案”，中途更正一次实验条件，最后要求据此写报告。检查压缩以后是否还遵守限制、采用更正后的数据、保留出处，再记录输入 token、额外调用和耗时。只比较摘要长度，会漏掉真正影响任务的损失。</p>
+<p>跨任务记忆还要单独检查：新会话能否取回已确认的偏好，取消的偏好是否仍影响答案，不同用户的记录会不会混入。同一套记忆实现可能在这些检查上表现不同，选型需要回到具体任务。</p>
+<p><a href="/blog/2026/09/23/agent-open-source-components/">上一篇：资料检索与 RAG</a> · <a href="/blog/2026/09/23/agent-multi-agent-implementations/">下一篇：多 Agent 协作的实现方案</a> · <a href="/blog/columns/agent/">Agent 学习笔记专栏</a></p>
+</div><aside class="toc"><div class="side-label">ON THIS PAGE</div><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%88%E5%8C%BA%E5%88%86%E4%B8%89%E7%A7%8D%E8%A6%81%E4%BF%9D%E5%AD%98%E7%9A%84%E4%B8%9C%E8%A5%BF"><span class="toc-text">先区分三种要保存的东西</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BC%9A%E8%AF%9D%E4%BF%9D%E5%AD%98%EF%BC%9ALangGraph-Checkpointer-%E4%B8%8E-SDK-Session"><span class="toc-text">会话保存：LangGraph Checkpointer 与 SDK Session</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%8A%E4%B8%8B%E6%96%87%E5%8E%8B%E7%BC%A9%EF%BC%9A%E6%91%98%E8%A6%81%E6%80%8E%E6%A0%B7%E8%BF%9B%E5%85%A5%E4%B8%8B%E4%B8%80%E8%BD%AE%E8%AF%B7%E6%B1%82"><span class="toc-text">上下文压缩：摘要怎样进入下一轮请求</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#LangChain-SummarizationMiddleware"><span class="toc-text">LangChain SummarizationMiddleware</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#OpenAI-%E4%B8%8E-Anthropic-%E7%9A%84-Compaction"><span class="toc-text">OpenAI 与 Anthropic 的 Compaction</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E8%B7%A8%E4%BB%BB%E5%8A%A1%E8%AE%B0%E5%BF%86%EF%BC%9A%E8%B0%81%E5%86%B3%E5%AE%9A%E5%86%99%E5%85%A5%E5%92%8C%E8%AF%BB%E5%8F%96"><span class="toc-text">跨任务记忆：谁决定写入和读取</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#LangGraph-Store%EF%BC%9A%E7%94%B1%E5%BA%94%E7%94%A8%E7%BB%84%E7%BB%87%E8%AF%BB%E5%86%99%E7%AD%96%E7%95%A5"><span class="toc-text">LangGraph Store：由应用组织读写策略</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Letta%EF%BC%9A%E5%B0%86%E8%AE%B0%E5%BF%86%E7%AE%A1%E7%90%86%E7%BA%B3%E5%85%A5%E6%9C%89%E7%8A%B6%E6%80%81-Agent"><span class="toc-text">Letta：将记忆管理纳入有状态 Agent</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Mem0%EF%BC%9A%E6%8A%8A%E8%AE%B0%E5%BF%86%E5%A4%84%E7%90%86%E6%8E%A5%E5%88%B0%E5%B7%B2%E6%9C%89-Agent-%E5%A4%96%E5%9B%B4"><span class="toc-text">Mem0：把记忆处理接到已有 Agent 外围</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Anthropic-Memory-Tool%EF%BC%9A%E6%A8%A1%E5%9E%8B%E9%80%9A%E8%BF%87%E5%B7%A5%E5%85%B7%E7%BB%B4%E6%8A%A4%E6%96%87%E4%BB%B6%E5%BC%8F%E8%AE%B0%E5%BF%86"><span class="toc-text">Anthropic Memory Tool：模型通过工具维护文件式记忆</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%80%8E%E6%A0%B7%E5%88%A4%E6%96%AD%E8%AE%B0%E5%BF%86%E7%9C%9F%E7%9A%84%E6%9C%89%E5%B8%AE%E5%8A%A9"><span class="toc-text">怎样判断记忆真的有帮助</span></a></li></ol></aside></div><nav class="post-navigation" aria-label="专栏阅读顺序"><a href="/blog/2026/09/23/agent-open-source-components/"><span>← 上一篇</span><br>Agent学习笔记（六）资料检索与 RAG：LlamaIndex、LangChain 与托管检索</a><a href="/blog/columns/agent/">专栏目录<br>7 / 8</a><a href="/blog/2026/09/23/agent-multi-agent-implementations/"><span>下一篇 →</span><br>Agent学习笔记（八）多 Agent 协作：任务委派、交接与团队调度</a></nav></article></main><footer><span>© 2026 OceanCT</span><span>保持好奇，把理解留下来。<span class="footer-dot">●</span></span><a href="#main">回到顶部 ↑</a></footer></div><script src="/blog/js/ocean.js" defer></script></body></html>

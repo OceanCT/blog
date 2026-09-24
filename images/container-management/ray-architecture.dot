@@ -1,0 +1,28 @@
+digraph Ray {
+ graph [rankdir=TB,bgcolor="#faf9f6",pad="0.3",nodesep="0.4",ranksep="0.65",fontname="PingFang SC",fontsize=20,label="Ray：从 Python 调用到分布式执行",labelloc=t];
+ node [shape=box,style="rounded,filled",fillcolor=white,color="#73828c",fontname="PingFang SC",fontsize=14,margin="0.18,0.12"];
+ edge [fontname="PingFang SC",fontsize=11,color="#486581",arrowsize=0.7];
+ user [label="用户：python demo.py\n或用 Ray Jobs 提交到已有集群"];
+ driver [label="Driver：运行主程序\nf.remote() · Actor.remote() · ray.get()",fillcolor="#dceaf5"];
+ subgraph cluster_head {label="Head 节点";color="#b8c6d1";style=rounded;
+ gcs [label="GCS\n节点 / Actor 等集群元数据"];
+ head [label="Raylet + 对象存储\nHead 也具备节点运行时"];
+ obs [label="Dashboard / Jobs 服务\n提交入口与观测（按部署启用）"];
+ gcs -> head [label="控制信息",dir=both];
+ }
+ subgraph cluster_worker {label="Worker 节点（可有多个）";color="#b8c6d1";style=rounded;
+ raylet [label="Raylet\n本地资源调度 · Worker 进程管理",fillcolor="#e3efe7"];
+ workers [label="Worker 进程\n执行 Task / 承载 Actor",fillcolor="#e3efe7"];
+ objects [label="对象存储\n共享内存中的对象数据",shape=cylinder];
+ raylet -> workers [label="安排执行资源"];
+ workers -> objects [label="存取较大对象",dir=both,color="#b77532"];
+ }
+ user -> driver [label="① 执行入口"];
+ driver -> raylet [label="② 申请执行资源（调度路径）"];
+ head -> raylet [label="分布式调度协作",dir=both];
+ gcs -> raylet [label="节点注册 / 元数据",dir=both,style=dashed];
+ driver -> workers [label="③ 调用 / 返回结果或引用",dir=both,color="#b77532"];
+ driver -> objects [label="④ 按引用获取对象",color="#b77532"];
+ note [shape=note,label="图示逻辑职责；Driver 可运行在集群节点中。\n小结果可直接返回，大对象可跨节点传输；数据不必经过 GCS。",fontsize=12];
+ objects -> note [style=invis];
+}

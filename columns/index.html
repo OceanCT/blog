@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>主题专栏 · OceanCT / Notes</title><meta name="description" content="OceanCT 的个人学习笔记，记录技术原理、动手实践与学习思考。"><meta name="theme-color" content="#f7f6f2"><link rel="stylesheet" href="/blog/css/ocean.css"><meta name="generator" content="Hexo 5.4.2"></head>
+<body><a class="skip" href="#main">跳到内容</a><div class="site"><header class="header"><a class="brand" href="/blog/" aria-label="OceanCT 首页"><span class="brand-mark">o.</span> OceanCT<span class="brand-slash"> / notes</span></a><nav aria-label="主导航"><a class="" href="/blog/">首页</a><a class="" href="/blog/archives/">归档</a><a class="active" href="/blog/columns/">专栏</a><a href="https://github.com/OceanCT" target="_blank" rel="noopener noreferrer">GitHub ↗</a></nav></header><main id="main"><section class="archive-head"><div class="eyebrow">THE COLLECTIONS</div><h1>主题专栏<span class="accent">。</span></h1><p>选一个主题，按顺序读下去。</p></section>
+<section class="columns-section">
+<div class="column-grid">
+
+  <article class="column-card" data-search="agent 从基本概念与论文机制出发，按模型接入、执行编排、检索、记忆和多 agent 协作比较实现方案。 agent学习笔记（一）agent设计中的几个问题 以现有的技术调研流程为参照，讨论换成 agent 后可以借鉴哪些经验，以及需要重新设计哪些机制。 agent学习笔记（二）从记住经历到管理上下文 从经历日志与 rag 出发，解释 memgpt 的两层存储、消息队列，以及 letta memory blocks 的挂载、读写和共享。 agent学习笔记（三）从 react 到反思与搜索 沿着一次执行、失败重试和分支搜索，比较 react、reflexion 与 lats，并讨论重规划、恢复和预算。 agent学习笔记（四）工具调用如何学会，又如何验收 先讲 toolformer、gorilla 的工具学习与调用生成方法，再介绍 bfcl benchmark 的题目与判分，区分方法设计和能力评测。 agent学习笔记（五）模型接入与执行编排：从 sdk 到 langchain、langgraph 从直接 http 调用解释 api、sdk 与兼容接口，再比较工具调用循环及 langgraph 的状态、并行、暂停和恢复。 agent学习笔记（六）资料检索与 rag：llamaindex、langchain 与托管检索 先拆解资料解析、索引、检索与答案生成，再比较 llamaindex、langchain 和模型服务的接入方式。 agent学习笔记（七）记忆管理：会话、压缩与跨任务记忆 区分会话保存、上下文压缩与跨任务记忆，比较 langgraph、letta、mem0 及 openai、anthropic 的相关接口。 agent学习笔记（八）多 agent 协作：任务委派、交接与团队调度 从职责、上下文和控制权出发，比较 langgraph、openai 与 claude agent sdk、autogen、crewai 的协作实现。">
+    <div class="column-meta"><span>主题专栏</span><span>8 篇</span></div>
+    <h3><a href="/blog/columns/agent/">Agent<span aria-hidden="true">↗</span></a></h3>
+    <p>从基本概念与论文机制出发，按模型接入、执行编排、检索、记忆和多 Agent 协作比较实现方案。</p>
+    <ol class="column-preview">
+    
+      <li><span class="chapter-number" aria-hidden="true">01</span><a href="/blog/2026/09/14/agent-design-foundations/">Agent设计中的几个问题</a></li>
+    
+      <li><span class="chapter-number" aria-hidden="true">02</span><a href="/blog/2026/09/14/agent-memory-memgpt-letta/">从记住经历到管理上下文</a></li>
+    
+      <li><span class="chapter-number" aria-hidden="true">03</span><a href="/blog/2026/09/14/agent-planning-react-reflexion-lats/">从 ReAct 到反思与搜索</a></li>
+    
+    </ol>
+    <a class="read-link" href="/blog/columns/agent/">查看完整目录 →</a>
+  </article>
+
+  <article class="column-card" data-search="实用小工具 从实际使用中的问题出发，介绍工具与 skill 的用途、关键修改和使用方法。 oceanct 的 humanize skill 从改稿时观察到的差异出发，介绍 oceanct humanize skill 的讲解逻辑与表达风格，附独立 skill 下载。 codex y：给日常使用补上几处小功能 给 codex 加上任务回收站、latex 公式与本地图片显示，并修复安装组件遗漏和空会话恢复问题。">
+    <div class="column-meta"><span>主题专栏</span><span>2 篇</span></div>
+    <h3><a href="/blog/columns/skills/">实用小工具<span aria-hidden="true">↗</span></a></h3>
+    <p>从实际使用中的问题出发，介绍工具与 Skill 的用途、关键修改和使用方法。</p>
+    <ol class="column-preview">
+    
+      <li><span class="chapter-number" aria-hidden="true">01</span><a href="/blog/2026/09/14/useful-tools-humanizer/">OceanCT 的 Humanize Skill</a></li>
+    
+      <li><span class="chapter-number" aria-hidden="true">02</span><a href="/blog/2026/09/23/useful-tools-codex-y/">Codex Y：给日常使用补上几处小功能</a></li>
+    
+    </ol>
+    <a class="read-link" href="/blog/columns/skills/">查看完整目录 →</a>
+  </article>
+
+  <article class="column-card" data-search="容器管理 从 k8s 容器编排到 ray 分布式计算，理解部署、调度和故障恢复的分工。 容器管理（一）在 mac 上验证 k8s：资源限制、健康检查与恢复 用 colima 和 kind 在 mac 上运行小程序，观察 cpu 节流、内存 oom、探针与 pod 补建，并沿执行过程理解 k8s 架构。 容器管理（二）ray 怎样运行任务，以及它与 k8s 的关系 从本地 task 与 actor 示例理解 ray 的架构、结果传递、ray serve 和 kuberay，并对照 k8s 的调度与恢复职责。">
+    <div class="column-meta"><span>主题专栏</span><span>2 篇</span></div>
+    <h3><a href="/blog/columns/k8s/">容器管理<span aria-hidden="true">↗</span></a></h3>
+    <p>从 K8S 容器编排到 Ray 分布式计算，理解部署、调度和故障恢复的分工。</p>
+    <ol class="column-preview">
+    
+      <li><span class="chapter-number" aria-hidden="true">01</span><a href="/blog/2026/09/15/k8s-control-loop-architecture/">容器管理（一）在 Mac 上验证 K8S：资源限制、健康检查与恢复</a></li>
+    
+      <li><span class="chapter-number" aria-hidden="true">02</span><a href="/blog/2026/09/18/ray-tasks-actors-and-kubernetes/">容器管理（二）Ray 怎样运行任务，以及它与 K8S 的关系</a></li>
+    
+    </ol>
+    <a class="read-link" href="/blog/columns/k8s/">查看完整目录 →</a>
+  </article>
+
+</div>
+<p id="no-results" class="no-results" hidden role="status">没有找到相关专栏或文章，试试其他关键词。</p>
+</section>
+</main><footer><span>© 2026 OceanCT</span><span>保持好奇，把理解留下来。<span class="footer-dot">●</span></span><a href="#main">回到顶部 ↑</a></footer></div><script src="/blog/js/ocean.js" defer></script></body></html>

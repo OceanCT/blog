@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Agent学习笔记（六）资料检索与 RAG：LlamaIndex、LangChain 与托管检索 · OceanCT / Notes</title><meta name="description" content="先拆解资料解析、索引、检索与答案生成，再比较 LlamaIndex、LangChain 和模型服务的接入方式。"><meta name="theme-color" content="#f7f6f2"><link rel="stylesheet" href="/blog/css/ocean.css"><meta name="generator" content="Hexo 5.4.2"></head>
+<body><a class="skip" href="#main">跳到内容</a><div class="site"><header class="header"><a class="brand" href="/blog/" aria-label="OceanCT 首页"><span class="brand-mark">o.</span> OceanCT<span class="brand-slash"> / notes</span></a><nav aria-label="主导航"><a class="" href="/blog/">首页</a><a class="" href="/blog/archives/">归档</a><a class="" href="/blog/columns/">专栏</a><a href="https://github.com/OceanCT" target="_blank" rel="noopener noreferrer">GitHub ↗</a></nav></header><main id="main">
+<div class="post-back"><a href="/blog/columns/agent/">← Agent 专栏</a></div><article class="post"><header class="post-header"><div class="eyebrow"><time datetime="2026-09-23">2026.09.23</time> / LEARNING NOTES</div><h1>Agent学习笔记（六）资料检索与 RAG：LlamaIndex、LangChain 与托管检索</h1><p class="post-description">先拆解资料解析、索引、检索与答案生成，再比较 LlamaIndex、LangChain 和模型服务的接入方式。</p><div class="post-tags"><a href="/blog/tags/Agent/">Agent</a><a href="/blog/tags/RAG/">RAG</a><a href="/blog/tags/LlamaIndex/">LlamaIndex</a></div></header><div class="post-grid"><div class="prose"><p>调研助手已经能够调用 <code>search_documents</code>，但把一个函数注册成工具，只解决了“怎样调用它”。搜索函数内部怎样读论文、找到实验数据、带回出处，是另一部分工作。</p>
+<p>如果只有两份短文，直接读入上下文就可以比较。资料变成几百篇 PDF、网页和持续更新的实验记录以后，我们需要根据问题挑出相关内容，再交给模型生成答案。这就是检索增强生成，也就是 RAG 要组织的过程。</p>
+<h2 id="一次检索应该带回什么"><a href="#一次检索应该带回什么" class="headerlink" title="一次检索应该带回什么"></a>一次检索应该带回什么</h2><p>用户问“方案 A 和方案 B 哪个吞吐更高”，只找回两个数字还不够。实验可能用了不同硬件、线程数和数据集，比较时需要把这些条件一起带回。我们可以把搜索结果设计成这样的结构：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">方法：方案 A</span><br><span class="line">指标：吞吐 800 MB/s</span><br><span class="line">条件：单线程，数据集 X</span><br><span class="line">出处：实验记录 v2，第 3 页</span><br><span class="line">原文片段：……</span><br></pre></td></tr></table></figure>
+
+<p>这些是说明数据结构的示例值。它们提示我们：检索工具的输出需要包含证据及其解释条件。正文切分时若把数值与表头拆开，或者更新文档后仍返回旧版本，后面的模型即使按要求调用工具，也可能作出错误比较。</p>
+<p>完整处理可以分成准备资料和回答查询两部分：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">准备资料：原始文件 → 解析正文与表格 → 切分内容 → 保存出处 → 建立索引</span><br><span class="line">回答查询：用户问题 → 检索候选片段 → 筛选或重排 → 返回证据 → 生成答案</span><br></pre></td></tr></table></figure>
+
+<p>关键词检索适合精确方法名、错误码和字段名；向量检索通过文本表示寻找语义相关内容。是否结合两者，以及是否额外调用模型重排，要看资料和查询的特点。外围 Agent 只需要一个查询入口，入口内部可以由我们自己实现，也可以使用开源组件。</p>
+<h2 id="LlamaIndex：围绕文档与查询组织组件"><a href="#LlamaIndex：围绕文档与查询组织组件" class="headerlink" title="LlamaIndex：围绕文档与查询组织组件"></a>LlamaIndex：围绕文档与查询组织组件</h2><p>LlamaIndex 用 <code>Document</code> 表示加载后的文档，用 <code>Node</code> 表示可检索的内容单元。切分时可以保留来源信息，再建立索引。<code>Retriever</code> 负责取回候选内容；<code>Query Engine</code> 可以把检索和基于证据生成答案接成一个入口。<a target="_blank" rel="noopener" href="https://developers.llamaindex.ai/python/framework/understanding/rag/">官方 RAG 说明</a>。</p>
+<p>对于这个调研助手，可以先让 Retriever 返回原文和出处，由外围 Agent 比较；也可以把 Query Engine 封装成工具，让它先回答“方案 A 的实验条件是什么”。后一种方式中，一次工具调用可能已经包含额外的模型生成，评估成本时要把它算进去。</p>
+<p>它提供的便利集中在文档加载、切分、索引与查询之间的连接。具体 PDF 的表格有没有解析正确、实验条件是否跟着数值一起取回，仍要用实际资料检查。<a target="_blank" rel="noopener" href="https://github.com/run-llama/llama_index">LlamaIndex 开源仓库</a>。</p>
+<h2 id="LangChain：把检索组件接入已有调用流程"><a href="#LangChain：把检索组件接入已有调用流程" class="headerlink" title="LangChain：把检索组件接入已有调用流程"></a>LangChain：把检索组件接入已有调用流程</h2><p>LangChain 也提供文档加载器、文本切分器、向量存储集成和 Retriever 接口。应用可以把它们接成检索工具，也可以查询已有数据库，把结果作为上下文交给模型。<a target="_blank" rel="noopener" href="https://docs.langchain.com/oss/python/deepagents/retrieval">官方检索组件说明</a>。</p>
+<p>因此，LlamaIndex 与 LangChain 在这一层确实有重叠。若程序已经用 LangChain 接入模型和工具，可以先检查现有检索组件能否处理资料；若主要工作是组织多种文档和查询过程，则可以具体考察 LlamaIndex 的数据抽象。比较时，应让两种实现处理同一份论文与同一组问题，观察差异发生在解析、检索还是答案生成。</p>
+<p>没有必要为了使用 LlamaIndex，再替换外围 Agent 循环。只要工具返回的证据结构约定清楚，检索部分就可以单独替换。</p>
+<h2 id="OpenAI-与-Anthropic：怎样接入这条数据路径"><a href="#OpenAI-与-Anthropic：怎样接入这条数据路径" class="headerlink" title="OpenAI 与 Anthropic：怎样接入这条数据路径"></a>OpenAI 与 Anthropic：怎样接入这条数据路径</h2><p>OpenAI 的 Responses API 提供托管的 <code>file_search</code>。应用上传文件并建立 vector store，模型可以通过这个工具查询资料，服务端负责执行搜索，支持语义与关键词检索。它与自己搭 LlamaIndex 的差别，首先是检索服务由谁运行和维护。<a target="_blank" rel="noopener" href="https://developers.openai.com/api/docs/guides/tools-file-search">官方 file search 说明</a>。</p>
+<p>若使用 Anthropic Messages API，可以把自己的检索实现注册为客户端工具：模型返回查询参数，应用执行搜索，再通过 <code>tool_result</code> 返回证据。同样的方式也能接入 OpenAI 的函数工具。这样，LlamaIndex 或 LangChain 的检索组件可以独立于模型服务存在。<a target="_blank" rel="noopener" href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/how-tool-use-works">Anthropic 工具调用机制</a>。</p>
+<p>这两条路径分别展示了托管检索和自建检索的接入方式。前者减少检索服务的部署工作，后者让我们直接控制文档处理、索引和返回格式；模型能否理解证据，还需要单独检查。</p>
+<h2 id="在同一个任务里比较实现"><a href="#在同一个任务里比较实现" class="headerlink" title="在同一个任务里比较实现"></a>在同一个任务里比较实现</h2><table>
+<thead>
+<tr>
+<th>实现方式</th>
+<th>可以直接复用什么</th>
+<th>需要重点检查什么</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>自写文件或数据库查询</td>
+<td>已有数据与索引</td>
+<td>查询是否能覆盖真实问题，返回值是否带条件和出处</td>
+</tr>
+<tr>
+<td>LlamaIndex</td>
+<td>文档、Node、索引、Retriever、Query Engine</td>
+<td>解析与切分结果，检索和生成之间的分工</td>
+</tr>
+<tr>
+<td>LangChain 检索组件</td>
+<td>加载、切分、向量存储与检索接口</td>
+<td>组件组合是否适合资料，能否融入现有工具流程</td>
+</tr>
+<tr>
+<td>OpenAI file search</td>
+<td>托管文件检索及模型工具接入</td>
+<td>上传与更新流程、检索结果、数据与成本约束</td>
+</tr>
+</tbody></table>
+<p>可以先准备一组有明确出处的问题，例如某个吞吐数值在哪一页、使用几个线程、新版记录是否推翻旧结论。先看检索有没有找回正确证据，再看模型有没有据此回答。两步分开检查，才能知道换一个模型、调整切分，还是修改检索策略更有帮助。</p>
+<p>资料检索处理的是当前任务所需的外部证据。用户确认过的偏好、过去任务留下的结论，怎样保存并在以后重新使用，还需要记忆的写入和更新策略。</p>
+<p><a href="/blog/2026/09/15/agent-frameworks-langgraph/">上一篇：模型接入与执行编排</a> · <a href="/blog/2026/09/23/agent-memory-implementations/">下一篇：记忆管理的实现方案</a> · <a href="/blog/columns/agent/">Agent 学习笔记专栏</a></p>
+</div><aside class="toc"><div class="side-label">ON THIS PAGE</div><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E6%AC%A1%E6%A3%80%E7%B4%A2%E5%BA%94%E8%AF%A5%E5%B8%A6%E5%9B%9E%E4%BB%80%E4%B9%88"><span class="toc-text">一次检索应该带回什么</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#LlamaIndex%EF%BC%9A%E5%9B%B4%E7%BB%95%E6%96%87%E6%A1%A3%E4%B8%8E%E6%9F%A5%E8%AF%A2%E7%BB%84%E7%BB%87%E7%BB%84%E4%BB%B6"><span class="toc-text">LlamaIndex：围绕文档与查询组织组件</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#LangChain%EF%BC%9A%E6%8A%8A%E6%A3%80%E7%B4%A2%E7%BB%84%E4%BB%B6%E6%8E%A5%E5%85%A5%E5%B7%B2%E6%9C%89%E8%B0%83%E7%94%A8%E6%B5%81%E7%A8%8B"><span class="toc-text">LangChain：把检索组件接入已有调用流程</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#OpenAI-%E4%B8%8E-Anthropic%EF%BC%9A%E6%80%8E%E6%A0%B7%E6%8E%A5%E5%85%A5%E8%BF%99%E6%9D%A1%E6%95%B0%E6%8D%AE%E8%B7%AF%E5%BE%84"><span class="toc-text">OpenAI 与 Anthropic：怎样接入这条数据路径</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9C%A8%E5%90%8C%E4%B8%80%E4%B8%AA%E4%BB%BB%E5%8A%A1%E9%87%8C%E6%AF%94%E8%BE%83%E5%AE%9E%E7%8E%B0"><span class="toc-text">在同一个任务里比较实现</span></a></li></ol></aside></div><nav class="post-navigation" aria-label="专栏阅读顺序"><a href="/blog/2026/09/15/agent-frameworks-langgraph/"><span>← 上一篇</span><br>Agent学习笔记（五）模型接入与执行编排：从 SDK 到 LangChain、LangGraph</a><a href="/blog/columns/agent/">专栏目录<br>6 / 8</a><a href="/blog/2026/09/23/agent-memory-implementations/"><span>下一篇 →</span><br>Agent学习笔记（七）记忆管理：会话、压缩与跨任务记忆</a></nav></article></main><footer><span>© 2026 OceanCT</span><span>保持好奇，把理解留下来。<span class="footer-dot">●</span></span><a href="#main">回到顶部 ↑</a></footer></div><script src="/blog/js/ocean.js" defer></script></body></html>

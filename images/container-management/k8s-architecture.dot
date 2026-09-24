@@ -1,0 +1,32 @@
+digraph K8S {
+ graph [rankdir=TB,bgcolor="#faf9f6",pad="0.3",nodesep="0.35",ranksep="0.6",fontname="PingFang SC",fontsize=20,label="Kubernetes：从提交配置到运行容器",labelloc=t];
+ node [shape=box,style="rounded,filled",fillcolor="white",color="#73828c",fontname="PingFang SC",fontsize=14,margin="0.18,0.12"];
+ edge [fontname="PingFang SC",fontsize=11,color="#486581",arrowsize=0.7];
+ user [label="用户 / kubectl\napply · get · scale"];
+ subgraph cluster_control { label="控制平面";color="#b8c6d1";style=rounded;
+ api [label="API Server\n认证 · 校验 · 对象读写 / Watch",fillcolor="#dceaf5"];
+ etcd [label="etcd\n持久保存集群对象",shape=cylinder];
+ ctl [label="Controller Manager\nDeployment → ReplicaSet → Pod"];
+ sched [label="Scheduler\n选择 Node，写入 Pod 绑定"];
+ api -> etcd [label="保存 / 读取",dir=both];
+ api -> ctl [label="监听对象 / 提交修改",dir=both];
+ api -> sched [label="监听未调度 Pod / 写绑定",dir=both];
+ }
+ subgraph cluster_node { label="工作节点 Node（可有多个）";color="#b8c6d1";style=rounded;
+ kubelet [label="kubelet\n落实 Pod · 探针 · 状态与心跳",fillcolor="#e3efe7"];
+ runtime [label="容器运行时（如 containerd）"];
+ pod [label="Pod\n应用容器",fillcolor="#e3efe7"];
+ net [label="Service 转发\nkube-proxy 或替代实现"];
+ kubelet -> runtime [label="CRI：创建 / 停止"];
+ runtime -> pod [label="运行容器"];
+ kubelet -> pod [label="健康探测",style=dashed];
+ net -> pod [label="转发到就绪后端",color="#b77532"];
+ }
+ user -> api [label="① HTTPS 请求"];
+ api -> kubelet [label="② 监听分配 / 回报状态与心跳",dir=both];
+ api -> net [label="Service / EndpointSlice 变化",style=dashed];
+ client [label="调用方\n通过 DNS 找到 Service"];
+ client -> net [label="③ 业务流量",color="#b77532"];
+ note [shape=note,label="Pod 网络由网络插件提供；持久卷由存储系统提供。\n实线：控制调用或业务流量；虚线：探测 / 配置监听。",fontsize=12];
+ pod -> note [style=invis];
+}
