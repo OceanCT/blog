@@ -1,19 +1,24 @@
 - id: agent
   title: Agent
-  description: 从基本概念出发，依次理解记忆、规划、工具调用与框架设计。
+  description: 从基本概念与论文机制出发，按模型接入、执行编排、检索、记忆和多 Agent 协作比较实现方案。
   posts:
     - agent-design-foundations
     - agent-memory-memgpt-letta
     - agent-planning-react-reflexion-lats
     - agent-tools-toolformer-gorilla-bfcl
     - agent-frameworks-langgraph
+    - agent-open-source-components
+    - agent-memory-implementations
+    - agent-multi-agent-implementations
 - id: skills
-  title: 实用 Skill
-  description: 从实际使用中的问题出发，介绍 Skill 的用途、写法和使用方法。
+  title: 实用小工具
+  description: 从实际使用中的问题出发，介绍工具与 Skill 的用途、关键修改和使用方法。
   posts:
     - useful-tools-humanizer
+    - useful-tools-codex-y
 - id: k8s
-  title: K8S
-  description: 从服务部署理解控制循环、集群架构、调度与故障处理。
+  title: 容器管理
+  description: 从 K8S 容器编排到 Ray 分布式计算，理解部署、调度和故障恢复的分工。
   posts:
     - k8s-control-loop-architecture
+    - ray-tasks-actors-and-kubernetes

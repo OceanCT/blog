@@ -1,6 +1,6 @@
 ---
 layout: column
-title: 实用 Skill 专栏
+title: 实用小工具
 column_id: skills
-description: 从实际使用中的问题出发，介绍 Skill 的用途、写法和使用方法。
+description: 从实际使用中的问题出发，介绍工具与 Skill 的用途、关键修改和使用方法。
 ---

@@ -5,7 +5,7 @@ import hashlib
 from pathlib import Path
 
 # Refresh this digest only after reviewing the translation against changed rules.
-TRANSLATED_SOURCE_SHA256 = "0ac2b3e7b97bee6ff116590d6ef3c51fead83b46da04a049dbb42cd3fb09cf5d"
+TRANSLATED_SOURCE_SHA256 = "05eac36c45ddb384214b01255b10f3edee315c4d719dd22a031223707422b878"
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--repo', type=Path, required=True)

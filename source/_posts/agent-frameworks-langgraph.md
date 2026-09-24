@@ -1,53 +1,195 @@
 ---
-title: "Agent学习笔记（五）从 LangGraph 理解 Agent 框架怎样设计"
-updated: 2026-09-15 10:55:27
+title: "Agent学习笔记（五）模型接入与执行编排：从 SDK 到 LangChain、LangGraph"
 date: 2026-09-15 10:51:30
-description: "从调研助手拆解 Agent 框架的状态、调度、恢复、人工介入与记忆，并比较 LangChain、CrewAI 和 AutoGen 的组织方式。"
+updated: 2026-09-23 13:45:24
+description: "从直接 HTTP 调用解释 API、SDK 与兼容接口，再比较工具调用循环及 LangGraph 的状态、并行、暂停和恢复。"
 categories: ["Agent 学习笔记"]
-tags: ["Agent", "LangGraph", "框架"]
+tags: ["Agent", "LangGraph", "SDK", "框架"]
 ---
 
-我们已经讨论了 Agent 怎样规划、保存记忆和调用工具。实际写代码时，还会遇到 LangGraph、LangChain、CrewAI、AutoGen 这些名字。它们与 ReAct、MemGPT、Gorilla 有什么关系？如果论文中的方法已经讲清楚了，框架还要解决什么？
+模型已经能够返回工具名称和参数，我们也会写函数执行这些请求，那么为什么还需要 Agent 框架？要回答这个问题，可以先把一次调用完整地走通，再看任务变长以后，程序还要承担哪些工作。
 
-我们继续做那个日志压缩调研助手：它需要寻找资料、读取原文、比较指标、写出报告，并在得到确认后交付。一次顺利的演示不难组织；真正麻烦的是读到一半服务超时、用户第二天才回复、两条检索同时返回，或者报告已经写成功但程序没收到响应。框架的作用，要从这些具体的执行问题看。
+我们想做一个日志压缩调研助手：读取论文和实验记录，比较吞吐与压缩率，最后形成报告。模型负责根据已有信息提出下一步，程序负责执行工具、传回结果，并控制流程。模型接入解决双方怎样交换消息，执行编排解决这些调用怎样连续运行、失败以后怎样继续。
 
-## 先把方法、模型、框架和评测放到各自的位置
+## 从 HTTP 请求看 SDK 到底做了什么
 
-ReAct 描述一种根据观察继续选择行动的过程。我们可以让模型先提出搜索调用，收到结果后再决定读取哪篇资料。Gorilla 研究怎样训练模型，把需求转成 API 调用。MemGPT 讨论有限上下文与外部记忆如何配合。它们提供可以被实现的机制与研究证据，范围并不相同。
+先不使用框架，也不使用 SDK。模型服务提供一个 API 地址，程序按约定发送请求，就能获得响应。以 DeepSeek 的 Chat Completions 接口为例，配置好 `DEEPSEEK_API_KEY` 后，可以直接发送：
 
-LangGraph 则提供组织程序执行的抽象：哪些数据是当前状态，哪段代码现在运行，运行后进入哪里，以及怎样保存进度。我们可以在这样的运行结构里实现 ReAct，也可以放进一个完全按固定顺序执行的流程。BFCL 是 benchmark（评测基准），用题目与检查规则测量工具调用能力；它的主要贡献是评测设计，没有规定 Agent 应采用哪套运行架构。框架执行成功、模型给出正确答案、评测通过，是需要分别观察的结果。
-
-| 对象 | 在调研助手里回答的问题 |
-| --- | --- |
-| 模型与训练方法 | 能否理解需求、选择工具、生成有依据的内容？ |
-| Agent 方法 | 怎样组织观察、行动、反思和记忆使用？ |
-| 框架与运行时 | 怎样调度代码、传递状态、暂停并恢复？ |
-| 工具及协议 | 怎样访问搜索、文件和外部服务？ |
-| Benchmark（如 BFCL） | 用什么测试题和判分规则检查能力？ |
-
-这张表按职责划分，不表示每个项目只属于其中一格。一个框架可以附带预置的 Agent 循环、记忆组件和评测接口；用到这些组件，也仍要理解它们各自负责什么。前面的机制可回看站内的[规划篇](/blog/2026/09/14/agent-planning-react-reflexion-lats/)、[记忆篇](/blog/2026/09/14/agent-memory-memgpt-letta/)和[工具调用篇](/blog/2026/09/14/agent-tools-toolformer-gorilla-bfcl/)。
-
-## 从一个自己写的循环开始
-
-假设先不用框架，我们可以写一个这样的程序。这里是说明流程的伪代码：
-
-```python
-while budget_remaining():
-    context = build_context(task_state, relevant_memory)
-    response = model(context, available_tools)
-    if response.is_final:
-        return response.answer
-    for call in response.tool_calls:
-        validate_arguments_and_permission(call)
-        result = execute(call)
-        task_state.record(call, result)
+```bash
+curl https://api.deepseek.com/chat/completions \
+  -H "Authorization: Bearer $DEEPSEEK_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "deepseek-flash",
+    "messages": [
+      {"role": "user", "content": "调研日志压缩方案时，应比较哪些实验条件？"}
+    ],
+    "stream": false
+  }'
 ```
 
-这个循环已经可以表达一种工具型 Agent。工具执行结果进入状态，下一次模型调用读到结果，再选择行动。程序中的循环控制、校验和记录，都由宿主代码完成。
+这里，URL 决定请求发给哪个服务、调用哪个接口；请求头携带身份凭据和内容类型；JSON 中的 `model` 指定模型，`messages` 提供对话。服务端返回 JSON，程序再从响应里读取回答。[DeepSeek 官方调用示例](https://api-docs.deepseek.com/)。
 
-任务变长以后，就会出现新的需求。`task_state` 只在内存里，进程退出后怎样继续？用户暂时不批准报告，是否一直占着进程等待？两个读取任务并行返回，怎样合并证据？执行超时以后，重跑哪一段才合理？我们当然可以继续自己写，但必须定义清楚状态、调度和恢复之间的约定。
+如果改用 OpenAI 的 Python SDK，同样的调用可以写成：
 
-LangGraph 把这些约定做成可复用的运行结构。它支持显式定义图，也提供保留普通函数与控制流写法的 Functional API；后者通过入口函数与任务边界接入相同运行时。因此，理解框架的重点在执行语义，画出流程图只是其中一种表达方式。[官方说明：LangGraph 概览](https://docs.langchain.com/oss/python/langgraph/overview)、[Functional API](https://docs.langchain.com/oss/python/langgraph/functional-api)。
+```python
+import os
+from openai import OpenAI
+
+client = OpenAI(
+    api_key=os.environ["DEEPSEEK_API_KEY"],
+    base_url="https://api.deepseek.com",
+)
+response = client.chat.completions.create(
+    model="deepseek-flash",
+    messages=[
+        {"role": "user", "content": "调研日志压缩方案时，应比较哪些实验条件？"}
+    ],
+    stream=False,
+)
+print(response.choices[0].message.content)
+```
+
+SDK 运行在我们的程序里。它接收函数参数，拼好请求路径和请求头，把数据序列化成 JSON，发送请求，再把响应解析成便于访问的对象。连接、超时、重试和流式读取也可以由 SDK 封装。模型推理仍在服务端进行。
+
+```text
+直接调用：应用代码 ── HTTP 请求 / JSON 响应 ── 模型服务
+使用 SDK：应用代码 ── SDK ── HTTP 请求 / JSON 响应 ── 模型服务
+```
+
+所以 SDK 可以省掉一部分网络通信代码，也可以被跳过。上面两段代码展示的是同一个 API 调用的两种写法，尚未加入工具执行或多轮 Agent 循环。
+
+### 为什么 OpenAI SDK 可以调用 DeepSeek
+
+SDK 按一套 API 约定组织请求、解析响应。只要目标服务提供兼容的接口，它就能继续工作。上面的 `base_url` 指向 DeepSeek，因此请求直接发往 DeepSeek，使用的也是 DeepSeek 的密钥和模型。
+
+DeepSeek 同时提供 OpenAI 和 Anthropic 兼容入口。使用 Anthropic SDK 时，可以将服务地址配置为 `https://api.deepseek.com/anthropic`，再通过 `client.messages.create(...)` 调用。[官方 Anthropic 兼容接口说明](https://api-docs.deepseek.com/guides/anthropic_api/)。
+
+```text
+OpenAI SDK   → DeepSeek 的 OpenAI 兼容入口   → DeepSeek 模型
+Anthropic SDK → DeepSeek 的 Anthropic 兼容入口 → DeepSeek 模型
+```
+
+这里兼容两套格式的是服务端。两个 SDK 各自沿用原来的接口约定，服务端接受对应的请求，并返回对应格式的响应。
+
+如果目标服务没有提供兼容入口，只改地址就不够：请求路径可能不同，工具参数和返回字段也可能不同。比如 Chat Completions 通过 `choices[0].message` 读取消息，Anthropic Messages 通过 `content` 内容块表达返回内容。这时需要转换格式，或者改用相应的 SDK。即使有兼容入口，也应核对应用实际用到的字段和功能是否被支持。
+
+## 消息与工具描述：SDK 的输入和输出是什么
+
+`messages` 表示谁说了什么，工具参数的 schema 则描述一个工具接受哪些输入。两者可以出现在同一次请求里：前者告诉模型当前任务与历史，后者告诉模型有哪些可调用操作。这些是 API 的约定；具体字段名称和工具调用能力，要看所用接口与模型。
+
+假设应用已经实现 `search_documents(query)`，用于搜索本地实验记录。调用模型时，发送的是用户问题和工具描述；函数的代码仍留在应用中。工具描述中的参数 schema 可以表达为：
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "query": {"type": "string", "description": "要搜索的内容"}
+  },
+  "required": ["query"]
+}
+```
+
+它说明调用搜索时需要提供一个字符串参数 `query`。模型根据任务生成工具名称和参数，SDK 将服务端响应交回程序；此时搜索函数还没有执行。SDK 返回的也不一定是工具调用列表，还可能包含回答文本、结束原因和用量信息。
+
+上面的 HTTP 示例采用 Chat Completions 格式。OpenAI 还提供 Responses API；下面把它与 Anthropic 的 Messages API 放在一起，对照一次工具调用的请求与结果：
+
+| 一次交互中的对象 | OpenAI Responses API | Anthropic Messages API |
+| --- | --- | --- |
+| 工具参数定义 | 函数工具的 `parameters` | 工具的 `input_schema` |
+| 模型请求调用工具 | `function_call`，包含名称与 JSON 字符串形式的 `arguments` | assistant 消息中的 `tool_use` 内容块，`input` 是 JSON 对象 |
+| 程序返回工具结果 | `function_call_output`，用 `call_id` 对应调用 | user 消息中的 `tool_result`，用 `tool_use_id` 对应调用 |
+
+下面是同一次搜索在两个接口中的关键字段。为了看清往返关系，省略了模型名等请求配置和无关响应字段；这不是一次真实运行的日志。
+
+```text
+OpenAI Responses
+请求 input:
+  [{"role":"user","content":"查询方案 A 的吞吐和实验条件"}]
+响应 output 中的一项:
+  {"type":"function_call","call_id":"call_1",
+   "name":"search_documents","arguments":"{\"query\":\"方案 A 吞吐 实验条件\"}"}
+应用执行搜索后，追加结果:
+  {"type":"function_call_output","call_id":"call_1",
+   "output":"实验记录第 3 页：吞吐 800 MB/s，单线程，数据集 X。"}
+
+Anthropic Messages
+请求 messages:
+  [{"role":"user","content":"查询方案 A 的吞吐和实验条件"}]
+响应 assistant 的 content 中的一项:
+  {"type":"tool_use","id":"toolu_1",
+   "name":"search_documents","input":{"query":"方案 A 吞吐 实验条件"}}
+应用执行搜索后，追加 user 消息:
+  {"role":"user","content":[
+    {"type":"tool_result","tool_use_id":"toolu_1",
+     "content":"实验记录第 3 页：吞吐 800 MB/s，单线程，数据集 X。"}
+  ]}
+```
+
+第二次请求需要让模型同时看到原来的问题、调用请求和工具结果。手动管理历史时，应保留完整的相关响应项，再追加结果；Responses 也提供服务端续接方式。收到结果以后，模型可能请求读取原文，也可能生成比较结论，程序据此继续循环。上面的数值只是用于说明消息结构。接口细节见 [OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling) 和 [Anthropic tool use](https://platform.claude.com/docs/en/agents-and-tools/tool-use/how-tool-use-works)。
+
+用普通模型 SDK 的单次请求方法时，本地工具仍由应用执行。Agent SDK 或工具循环辅助器会进一步封装执行工具、回填结果和再次请求的过程。例如 Anthropic 的 [tool runner](https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-runner) 会调用注册的工具并继续请求，直到模型不再要求调用工具或达到配置的迭代上限。判断一个 SDK 替我们做了多少工作，要看使用的是哪一层接口。
+
+## Agent 循环：谁调用工具，什么时候结束
+
+如果自己写，循环可以是下面这样。这里用伪代码省略两家 API 的格式差异：
+
+```python
+history = [user_question]
+for step in range(max_steps):
+    response = call_model(history, tool_descriptions)
+    history.extend(response.items)
+    if response.is_complete:
+        return response.answer
+    if not response.tool_calls:
+        return handle_incomplete_response(response)
+    for call in response.tool_calls:
+        args = validate(call.arguments)
+        result = registered_tools[call.name](**args)
+        history.append(tool_result(call.id, result))
+return report_budget_exhausted()
+```
+
+循环负责把模型提出的动作变成实际调用。没有工具调用也不一定意味着任务成功，输出可能因长度限制等原因中止，所以程序还要检查完成状态。工具出错时，是重试、把错误交回模型，还是终止任务，也需要有明确处理。
+
+任务短、工具少时，这样的程序很容易理解。若多个任务反复需要消息转换、流式结果、重试和运行记录，就可以考虑复用已有的 Agent 循环。常见实现的区别在于开发者从哪里接入，以及哪些执行细节已经由库安排好。
+
+### LangChain：统一消息与常见执行循环
+
+LangChain 的模型适配器把服务商响应转换成统一消息。例如工具调用进入 `AIMessage.tool_calls`，工具结果进入 `ToolMessage`；下一轮请求再转换回相应服务商的格式。这样，工具执行代码不必分别认识每家 API 的字段。[消息转换源码](https://github.com/langchain-ai/langchain/blob/3971e49d24e1b0eef9f2446011583d5510fbbf44/libs/partners/openai/langchain_openai/chat_models/base.py#L217)。
+
+`create_agent` 接收模型、工具和系统提示词，建立模型与工具交替执行的循环，还可以通过 middleware 在调用前后调整行为。这个 Agent 建立在 LangGraph 上，底层负责状态与执行过程。[LangChain Agent 文档](https://docs.langchain.com/oss/python/langchain/agents)。
+
+如果应用固定使用一种模型服务，或者多个服务的兼容接口已经覆盖所需功能，直接沿用同一个 SDK 就很方便。此时不必只为切换模型增加一层适配。LangChain 还提供可复用的执行逻辑；搜索函数如何查资料、哪些错误值得重试，仍由应用决定。同步、异步、批量和流式调用等多种路径，也解释了通用实现为什么会比一个固定用途的循环大得多。
+
+### OpenAI Agents SDK：在应用里定义并运行 Agent
+
+OpenAI Agents SDK 提供 Agent、工具和运行器。应用定义角色指令与工具函数，运行器组织模型调用和工具执行，并提供运行结果、追踪及后续交接的接口。它与直接调用 Responses API 的区别，是已经实现了循环这一层；服务器部署、业务工具和存储仍由应用安排。[官方 Agents SDK 说明](https://developers.openai.com/api/docs/guides/agents/sdk)。
+
+对于调研助手，我们可以把搜索和读取函数交给它，由运行器推进一次任务。若还需要规定“检查不通过就补查，用户批准以后才交付”，这些业务转移仍要通过应用代码或相应编排能力表达。
+
+### Claude Agent SDK：接入已有的工具环境和循环
+
+Claude Agent SDK 通过 Python 或 TypeScript 接入 Claude Code 的执行能力，包含文件读写、命令执行等内置工具，以及权限、会话和 hooks。它运行 Claude Code 二进制程序；相比从工具函数开始搭一个循环，接入时已经带着一套工具环境和上下文管理方式。[官方 Agent SDK 说明](https://code.claude.com/docs/en/agent-sdk/overview)。
+
+这适合需要在文件和命令环境中连续工作的任务。开发者主要配置可用工具、权限与行为扩展；若想从底层自行定义消息处理和循环，直接使用 Messages API 或普通客户端 SDK 更容易看清每一步。SDK 包的公开代码与底层 Claude Code 运行程序也应分开看，不能因为有公开仓库就把整个执行系统当作可修改的开源实现。[Python SDK 仓库](https://github.com/anthropics/claude-agent-sdk-python)。
+
+| 实现入口 | 已提供的公共部分 | 应用主要控制什么 |
+| --- | --- | --- |
+| 模型 SDK + 自己写循环 | API 请求、响应对象；部分 SDK 有工具循环辅助器 | 历史、工具调度、退出与错误处理 |
+| LangChain | 统一消息、模型适配、常见 Agent 循环及中间件 | 工具、运行策略与业务规则 |
+| OpenAI Agents SDK | Agent 运行循环、工具调用与运行接口 | Agent 定义、业务工具与外围流程 |
+| Claude Agent SDK | Claude Code 循环、内置工具与会话能力 | 工具授权、配置及 hooks 扩展 |
+
+这里主要比较可接入应用的实现。LangChain、LangGraph 和 OpenAI Agents SDK 可作为开源代码阅读与修改的起点；模型 API 本身是服务接口，采用开源客户端不会使服务端模型和执行服务一并开源。
+
+## 执行编排：循环之外还要保存哪些约定
+
+假设助手读到一半服务超时，用户第二天才回复，或者两条检索同时返回。此时我们需要知道当前做到了哪一步、下一步运行什么，以及哪些工作可以复用。执行编排就是把这些状态与转移关系写清楚。
+
+LangGraph 让开发者显式定义状态、工作节点和转移，也提供保留普通函数与控制流写法的 Functional API。一个节点可以调用模型，也可以只处理数据；我们可以用它实现 Agent 循环，也可以组织完全固定的工作流。[LangGraph 概览](https://docs.langchain.com/oss/python/langgraph/overview)、[Functional API](https://docs.langchain.com/oss/python/langgraph/functional-api)。
+
+因此，LangChain 与 LangGraph 的区别可以从接入位置理解：前者先给我们一个常见 Agent 循环，后者让我们直接安排任务的执行结构。需要多少控制，取决于现成循环能否表达自己的任务。
 
 ## LangGraph 的图，到底由什么组成
 
@@ -221,83 +363,12 @@ print("状态：", finished["status"])
 
 这里没有模型调用，所以它首先验证的是一个可暂停的工作流。把 `collect` 换成真实的检索与读取，把 `draft` 换成根据证据生成报告，再加入根据工具结果决定后续动作的节点，才逐步形成我们要的 Agent。`compile` 把节点、边和存储配置组织成可执行图，它不会训练模型，也不会替我们补齐节点内部的业务逻辑。
 
-## 框架中的记忆，与 MemGPT 是什么关系
+## 怎样比较这些实现
 
-状态保存与模型记忆很容易被混为一谈。假设报告进度保存在数据库里，但下一次调用模型时，我们只传入一句“继续”。模型并不会自动访问那份数据库；程序仍要读取相关数据并构造上下文，或者给模型提供查询工具。
+对调研助手，可以先验证一次模型调用与工具结果回填，再检查复杂流程：读取 A 成功、读取 B 超时以后，是否只需补跑 B；报告等待审阅时能否暂停；恢复后会不会重复写入。前面的例子已经能观察暂停与分支，跨进程恢复还需要持久存储，外部写入还需要幂等处理。
 
-LangGraph 提供两种相互补充的持久化接口：checkpointer 面向一个 thread 的图状态，store 面向跨 thread 的应用数据。我们可以把“这项任务读到了第几篇论文”留在检查点里，把经过确认的“用户偏好中文报告”放在按用户划分的 store 中。短期与长期在这里主要描述使用范围，不能直接理解为只保存几分钟或几个月。[官方持久化接口对比](https://docs.langchain.com/oss/python/langgraph/persistence)。
+选择普通 SDK、Agent SDK 或图运行时，最终是在决定哪些执行约定由自己维护。若只需要一个短循环，普通代码就足够清楚；若需要显式状态、并行汇合和暂停恢复，LangGraph 这样的运行结构才有更直接的价值。
 
-MemGPT 则进一步讨论模型上下文有限时，哪些信息留在当前上下文、哪些放到外部存储，以及怎样通过调用管理信息。LangGraph 提供的存储接口可以承载我们实现的记忆策略，但安装它不会自动得到 MemGPT 的分层管理过程。
+执行状态中保存的历史怎样压缩、哪些事实值得跨任务保留，属于[记忆管理](/blog/2026/09/23/agent-memory-implementations/)；研究者和检查者怎样分别运行、传递结果，属于[多 Agent 协作](/blog/2026/09/23/agent-multi-agent-implementations/)。这两类策略可以接在同一个执行系统上。
 
-例如，我们可以在每次模型节点执行前，按当前问题从 store 查询相关偏好和事实，选择少量结果与任务状态一起进入上下文；任务结束后，再经过规则或模型提议与校验，决定更新哪些记忆。这里的选择、归纳、过期与删除传播都属于应用的记忆策略。框架提供读写位置与调用时机，具体记什么仍需设计。[LangGraph 记忆概念说明](https://docs.langchain.com/oss/python/concepts/memory)。
-
-## 常见框架为什么看起来很不一样
-
-理解了一套完整运行过程，再比较其他框架就容易一些：先看它让开发者以什么对象表达工作，再看运行时怎样处理状态和控制权。下面按 2026 年 9 月 15 日查阅的官方文档介绍，具体接口应随项目锁定的版本核对。
-
-### LangChain 与 LangGraph：便捷入口和运行结构
-
-在当前 LangChain 中，`create_agent` 可以根据模型、工具和提示词建立 Agent，减少手写常见循环的工作。其 Agent 构建在 LangGraph 之上，可以使用底层的持久化与人工介入等能力。
-
-因此，同一个调研助手可以先从 LangChain 的 Agent 入口开始；当我们需要明确控制“收集、检查、等待审阅、交付”之间的状态转移时，再直接使用 LangGraph 组织图。LangChain 也允许通过 middleware 调整运行行为，不能简单按“简单任务用一个、复杂任务只能用另一个”划死边界。需要比较的是现有抽象能否清楚表达我们的流程。[LangChain 官方概览](https://docs.langchain.com/oss/python/langchain/overview)。
-
-### CrewAI：从角色、任务与团队组织工作
-
-CrewAI 的 Crew 以 Agent、Task 和协作过程组织任务。例如我们可以定义资料研究者与报告作者，让前者完成证据整理，后者消费结果写报告。顺序过程按照任务顺序执行；层级过程引入负责协调的管理者。
-
-这种入口接近“谁负责什么、交付什么”。但角色名称本身不会使模型获得专业知识，“审稿人”也不保证发现错误。我们仍要给它来源、检查标准与可用工具，并检查任务输出。[CrewAI 的 Crew 定义与过程](https://docs.crewai.com/en/concepts/crews)。
-
-CrewAI 同时提供 Flow，用状态、事件触发和路由组织应用过程。因而可以在外围 Flow 中落实收集、审批和交付顺序，再把需要协作的部分交给 Crew。不能把它概括成只有几个角色互相聊天。[CrewAI Flows](https://docs.crewai.com/en/concepts/flows)。
-
-### AutoGen：从消息交互和 Agent 运行时组织工作
-
-AutoGen 的 AgentChat 面向单 Agent 和多 Agent 对话应用，底层 Core 提供事件驱动的 Agent 运行机制。可以把资料研究者的结果作为消息交给报告作者，再让检查者返回反馈；开发者需要安排参与者、消息流向和结束条件。
-
-在调研任务里，这种表达方式让“谁接到什么消息、由谁继续处理”更突出。若采用轮流发言或选择下一位参与者的协作方式，就应明确谁有权结束任务、哪些信息需要共享，以及怎样避免重复讨论。AutoGen 的不同版本也有接口差异，旧版 0.2 示例不能直接当成当前 AgentChat 的用法。[AutoGen 官方分层与版本迁移入口](https://microsoft.github.io/autogen/stable/index.html)。
-
-| 入口 | 首先组织的对象 | 我们的调研任务可以怎样表达 |
-| --- | --- | --- |
-| LangGraph | 状态、节点、转移 | 把收集、检查、审阅与交付明确连接 |
-| LangChain Agent | 模型、工具与 Agent 循环 | 配置调研工具，并在循环前后加入控制逻辑 |
-| CrewAI | Agent、Task、Crew，外围可用 Flow | 规定研究与写作职责，组织任务和交付顺序 |
-| AutoGen AgentChat / Core | 对话参与者、消息与事件 | 把证据、草稿与反馈在参与者之间传递 |
-
-这些是理解入口，不是互斥的能力清单。图里可以放多 Agent，角色型框架也可以运行固定流程。选型要拿同一任务验证：中断后能否接着做、失败后哪段重跑、状态是否便于检查、能否限制成本，而不是比较谁的角色名称更多。
-
-## 如果自己设计一个完整框架，需要哪些部分
-
-回到我们的调研助手，可以把运行系统分成几段相连的工作。接到请求后，服务验证用户与任务范围，建立或加载任务状态；运行时据此选择下一节点。模型节点构造上下文、接收模型输出，工具节点检查并执行调用；结果进入状态，再触发下一步。
-
-在这条路径旁边，需要持久化与事件记录。前者支持恢复，后者让用户看到“正在读取哪篇资料”，也让开发者能定位一次失败。一个可追踪的调用记录可以包含任务 ID、节点名、调用 ID、耗时、错误类型和结果引用；不必为了可观测性把全部敏感正文复制进日志。
-
-具体到服务边界，我们还需要自行决定以下事项：
-
-| 部分 | 必须作出的设计决定 |
-| --- | --- |
-| 模型适配 | 如何统一消息与调用格式，如何处理超时和结构化输出错误 |
-| 工具执行 | 哪些工具可用，参数与权限怎样检查，哪些动作支持重试 |
-| 调度控制 | 怎样表达依赖、并行、预算、取消与终止 |
-| 状态与恢复 | 保存什么，怎样识别任务，如何处理重复执行与版本变化 |
-| 上下文与记忆 | 每次给模型看什么，哪些事实跨任务保存，何时删除 |
-| 人工介入 | 用户在批准哪个对象和版本，恢复请求怎样验证 |
-| 观察与验收 | 怎样还原执行过程，怎样检查外部结果和任务质量 |
-
-不同框架已经实现了其中不同范围的公共部分，业务实现可以复用它们。数据库、服务端认证、工具凭据管理、任务队列和执行隔离等基础设施仍需按部署方式接入，使用一个框架的库并不等于整个服务已经具备这些能力。
-
-尤其要把“运行得可恢复”与“回答得正确”分开验证。一次任务可以完整保存每个错误结论，也可以成功恢复后继续调用错误工具。证据是否支持结论、报告是否满足用户要求，需要回到前面讨论的评测与验收标准。
-
-## 面试时可以沿着哪些问题继续讲
-
-**“LangGraph 与 ReAct 有什么关系？”** ReAct 描述根据观察继续行动的模式，LangGraph 可以用模型节点、工具节点和回路实现这种模式。实现还需要规定上下文构造、工具执行和退出条件，同一运行时也可以承载其他策略。
-
-**“State、上下文和长期记忆为什么要分开？”** State 记录程序运行所需的数据，上下文是本次实际传给模型的信息，长期记忆保留跨任务可复用的内容。保存数据以后还需要选择和读取，三者不必一一对应。
-
-**“有 checkpointer 就不会重复执行了吗？”** 恢复依据已保存的进度，尚未记录完成的代码可能重跑。外部写入与检查点之间存在失败窗口，仍需稳定的操作标识、幂等或结果核对。内存型 checkpointer 也无法提供跨进程恢复。
-
-**“多 Agent 与多个节点有什么区别？”** 节点是工作函数，可以只是字段校验。一个子 Agent 往往包含自己的模型循环、上下文和工具选择，可以作为节点或子图被调用。增加节点不等于增加独立决策者。
-
-**“什么时候自己写循环，什么时候用框架？”** 可以先列出真实需求。如果任务很短、失败后允许完整重来，普通程序可能已经足够清楚；如果存在多步状态、人工等待、并行与恢复需求，就应比较框架能否减少这些机制的维护成本。这个选择应通过任务样例和失败演练验证。
-
-对我们的调研助手，第一轮演练可以很具体：两篇资料读取时让一篇超时，检查另一篇结果是否保留；草稿暂停后重新启动服务，检查能否恢复同一任务；拒绝审阅，检查是否停止交付；模拟交付响应丢失，检查是否重复创建报告。框架是否适合这项工作，会在这些运行结果里体现出来。
-
-[上一篇：工具调用如何学会，又如何验收](/blog/2026/09/14/agent-tools-toolformer-gorilla-bfcl/) · [Agent 学习笔记专栏](/blog/columns/agent/)
+[上一篇：工具调用如何学会，又如何验收](/blog/2026/09/14/agent-tools-toolformer-gorilla-bfcl/) · [下一篇：资料检索与 RAG 的实现方案](/blog/2026/09/23/agent-open-source-components/) · [Agent 学习笔记专栏](/blog/columns/agent/)
