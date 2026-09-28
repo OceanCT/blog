@@ -1,7 +1,5 @@
 # OceanCT / Notes
 
-学一点，记下来。
-
 这里是我的个人学习笔记，记录技术原理、动手实践与学习思考。
 
 **[阅读博客 →](https://oceanct.github.io/blog/)**
